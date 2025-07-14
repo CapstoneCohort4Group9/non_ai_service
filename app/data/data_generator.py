@@ -4,7 +4,7 @@ from datetime import datetime, date, time, timedelta
 from decimal import Decimal
 from faker import Faker
 import asyncio
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from database_models import *
 
@@ -12,8 +12,8 @@ fake = Faker()
 
 class HopJetAirDataGenerator:
     def __init__(self, database_url):
-        self.engine = create_engine(database_url)
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.engine = create_async_engine(database_url)
+        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine, class_=AsyncSession)
         
     def generate_booking_reference(self):
         """Generate airline-style booking reference"""
@@ -304,94 +304,200 @@ class HopJetAirDataGenerator:
     
     async def populate_database(self):
         """Populate database with all data"""
-        db = self.SessionLocal()
-        try:
-            print("Creating tables...")
-            Base.metadata.create_all(bind=self.engine)
-            
-            print("Inserting airlines...")
-            airlines_data = self.create_airlines_data()
-            for airline_data in airlines_data:
-                airline = Airline(**airline_data)
-                db.add(airline)
-            db.commit()
-            
-            print("Inserting aircraft types...")
-            aircraft_types_data = self.create_aircraft_types_data()
-            for aircraft_type_data in aircraft_types_data:
-                aircraft_type = AircraftType(**aircraft_type_data)
-                db.add(aircraft_type)
-            db.commit()
-            
-            print("Inserting airports...")
-            airports_data = self.create_airports_data()
-            for airport_data in airports_data:
-                airport = Airport(**airport_data)
-                db.add(airport)
-            db.commit()
-            
-            print("Inserting passengers...")
-            passengers_data = self.generate_passengers(300)
-            for passenger_data in passengers_data:
-                passenger = Passenger(**passenger_data)
-                db.add(passenger)
-            db.commit()
-            
-            print("Inserting trip packages...")
-            packages_data = self.create_trip_packages_data()
-            for package_data in packages_data:
-                package = TripPackage(**package_data)
-                db.add(package)
-            db.commit()
-            
-            print("Inserting excursions...")
-            excursions_data = self.create_excursions_data()
-            for excursion_data in excursions_data:
-                excursion = Excursion(**excursion_data)
-                db.add(excursion)
-            db.commit()
-            
-            print("Inserting policies...")
-            policies_data = self.create_policies_data()
-            for policy_data in policies_data:
-                policy = AirlinePolicy(**policy_data)
-                db.add(policy)
-            db.commit()
-            
-            # Get IDs for further data generation
-            airlines = db.query(Airline).all()
-            aircraft_types = db.query(AircraftType).all()
-            airports = db.query(Airport).all()
-            passengers = db.query(Passenger).all()
-            
-            print("Generating aircraft...")
-            self.generate_aircraft(db, airlines, aircraft_types, 50)
-            
-            print("Generating routes...")
-            self.generate_routes(db, airports, 100)
-            
-            print("Generating flights...")
-            routes = db.query(Route).all()
-            aircraft = db.query(Aircraft).all()
-            self.generate_flights(db, airlines, routes, aircraft, 400)
-            
-            print("Generating bookings...")
-            flights = db.query(Flight).all()
-            self.generate_bookings(db, passengers, flights, 500)
-            
-            print("Generating seat maps...")
-            self.generate_seat_maps(db, aircraft_types)
-            
-            print("Database populated successfully!")
-            
-        except Exception as e:
-            print(f"Error populating database: {e}")
-            db.rollback()
-            raise
-        finally:
-            db.close()
+        # --- CHANGE 4: Use async with for session ---
+        async with self.SessionLocal() as db:
+            try:
+                print("Creating tables...")
+                # --- CHANGE 5: Run DDL operations asynchronously ---
+                async with self.engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                
+                print("Inserting airlines...")
+                airlines_data = self.create_airlines_data()
+                for airline_data in airlines_data:
+                    airline = Airline(**airline_data)
+                    db.add(airline)
+                await db.commit() # Use await db.commit()
+                
+                print("Inserting aircraft types...")
+                aircraft_types_data = self.create_aircraft_types_data()
+                for aircraft_type_data in aircraft_types_data:
+                    aircraft_type = AircraftType(**aircraft_type_data)
+                    db.add(aircraft_type)
+                await db.commit()
+                
+                print("Inserting airports...")
+                airports_data = self.create_airports_data()
+                for airport_data in airports_data:
+                    airport = Airport(**airport_data)
+                    db.add(airport)
+                await db.commit()
+                
+                print("Inserting passengers...")
+                passengers_data = self.generate_passengers(300)
+                for passenger_data in passengers_data:
+                    passenger = Passenger(**passenger_data)
+                    db.add(passenger)
+                await db.commit()
+                
+                print("Inserting trip packages...")
+                packages_data = self.create_trip_packages_data()
+                for package_data in packages_data:
+                    package = TripPackage(**package_data)
+                    db.add(package)
+                await db.commit()
+                
+                print("Inserting excursions...")
+                excursions_data = self.create_excursions_data()
+                for excursion_data in excursions_data:
+                    excursion = Excursion(**excursion_data)
+                    db.add(excursion)
+                await db.commit()
+                
+                print("Inserting policies...")
+                policies_data = self.create_policies_data()
+                for policy_data in policies_data:
+                    policy = AirlinePolicy(**policy_data)
+                    db.add(policy)
+                await db.commit()
+                
+                # Get IDs for further data generation (needs to be async queries)
+                # --- CHANGE 6: Use await db.execute() for queries ---
+                airlines_result = await db.execute(select(Airline))
+                airlines = airlines_result.scalars().all()
+
+                aircraft_types_result = await db.execute(select(AircraftType))
+                aircraft_types = aircraft_types_result.scalars().all()
+
+                airports_result = await db.execute(select(Airport))
+                airports = airports_types_result.scalars().all()
+                
+                passengers_result = await db.execute(select(Passenger))
+                passengers = passengers_result.scalars().all()
+                
+                print("Generating aircraft...")
+                await self.generate_aircraft(db, airlines, aircraft_types, 50) # Keep async
+                
+                print("Generating routes...")
+                await self.generate_routes(db, airports, 100) # Keep async
+                
+                print("Generating flights...")
+                routes_result = await db.execute(select(Route))
+                routes = routes_result.scalars().all()
+
+                aircraft_result = await db.execute(select(Aircraft))
+                aircraft = aircraft_result.scalars().all()
+
+                await self.generate_flights(db, airlines, routes, aircraft, 400) # Keep async
+                
+                print("Generating bookings...")
+                flights_result = await db.execute(select(Flight))
+                flights = flights_result.scalars().all()
+
+                await self.generate_bookings(db, passengers, flights, 500) # Keep async
+                
+                print("Generating seat maps...")
+                await self.generate_seat_maps(db, aircraft_types) # Keep async
+                
+                print("Database populated successfully!")
+                
+            except Exception as e:
+                print(f"Error populating database: {e}")
+                await db.rollback() # Use await db.rollback()
+                raise
+            # finally: (No db.close() needed with async with db: )
+            #    db.close() # No longer needed
+
+        """Populate database with all data"""
+        async with self.SessionLocal() as db:
+            try:
+                print("Creating tables...")
+                async with self.engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                
+                print("Inserting airlines...")
+                airlines_data = self.create_airlines_data()
+                for airline_data in airlines_data:
+                    airline = Airline(**airline_data)
+                    db.add(airline)
+                db.commit()
+                
+                print("Inserting aircraft types...")
+                aircraft_types_data = self.create_aircraft_types_data()
+                for aircraft_type_data in aircraft_types_data:
+                    aircraft_type = AircraftType(**aircraft_type_data)
+                    db.add(aircraft_type)
+                db.commit()
+                
+                print("Inserting airports...")
+                airports_data = self.create_airports_data()
+                for airport_data in airports_data:
+                    airport = Airport(**airport_data)
+                    db.add(airport)
+                db.commit()
+                
+                print("Inserting passengers...")
+                passengers_data = self.generate_passengers(300)
+                for passenger_data in passengers_data:
+                    passenger = Passenger(**passenger_data)
+                    db.add(passenger)
+                db.commit()
+                
+                print("Inserting trip packages...")
+                packages_data = self.create_trip_packages_data()
+                for package_data in packages_data:
+                    package = TripPackage(**package_data)
+                    db.add(package)
+                db.commit()
+                
+                print("Inserting excursions...")
+                excursions_data = self.create_excursions_data()
+                for excursion_data in excursions_data:
+                    excursion = Excursion(**excursion_data)
+                    db.add(excursion)
+                db.commit()
+                
+                print("Inserting policies...")
+                policies_data = self.create_policies_data()
+                for policy_data in policies_data:
+                    policy = AirlinePolicy(**policy_data)
+                    db.add(policy)
+                db.commit()
+                
+                # Get IDs for further data generation
+                airlines = db.query(Airline).all()
+                aircraft_types = db.query(AircraftType).all()
+                airports = db.query(Airport).all()
+                passengers = db.query(Passenger).all()
+                
+                print("Generating aircraft...")
+                self.generate_aircraft(db, airlines, aircraft_types, 50)
+                
+                print("Generating routes...")
+                self.generate_routes(db, airports, 100)
+                
+                print("Generating flights...")
+                routes = db.query(Route).all()
+                aircraft = db.query(Aircraft).all()
+                self.generate_flights(db, airlines, routes, aircraft, 400)
+                
+                print("Generating bookings...")
+                flights = db.query(Flight).all()
+                self.generate_bookings(db, passengers, flights, 500)
+                
+                print("Generating seat maps...")
+                self.generate_seat_maps(db, aircraft_types)
+                
+                print("Database populated successfully!")
+                
+            except Exception as e:
+                print(f"Error populating database: {e}")
+                db.rollback()
+                raise
+            finally:
+                db.close()
     
-    def generate_aircraft(self, db, airlines, aircraft_types, count):
+    async def generate_aircraft(self, db, airlines, aircraft_types, count):
         """Generate aircraft fleet"""
         for _ in range(count):
             aircraft = Aircraft(
@@ -402,9 +508,9 @@ class HopJetAirDataGenerator:
                 delivery_date=fake.date_between(start_date='-10y', end_date='today')
             )
             db.add(aircraft)
-        db.commit()
+        await db.commit()
     
-    def generate_routes(self, db, airports, count):
+    async def generate_routes(self, db, airports, count):
         """Generate flight routes"""
         created_routes = set()
         
@@ -428,9 +534,9 @@ class HopJetAirDataGenerator:
             db.add(route)
             created_routes.add(route_key)
         
-        db.commit()
+        await db.commit()
     
-    def generate_flights(self, db, airlines, routes, aircraft, count):
+    async def generate_flights(self, db, airlines, routes, aircraft, count):
         """Generate flights"""
         statuses = ['scheduled', 'boarding', 'departed', 'arrived', 'delayed', 'cancelled']
         
@@ -462,9 +568,9 @@ class HopJetAirDataGenerator:
             )
             db.add(flight)
         
-        db.commit()
+        await db.commit()
     
-    def generate_bookings(self, db, passengers, flights, count):
+    async def generate_bookings(self, db, passengers, flights, count):
         """Generate bookings and booking segments"""
         classes = ['economy', 'premium_economy', 'business', 'first']
         trip_types = ['one-way', 'round-trip', 'multi-city']
@@ -515,9 +621,9 @@ class HopJetAirDataGenerator:
                 )
                 db.add(segment)
         
-        db.commit()
+        await db.commit()
     
-    def generate_seat_maps(self, db, aircraft_types):
+    async def generate_seat_maps(self, db, aircraft_types):
         """Generate seat maps for aircraft types"""
         for aircraft_type in aircraft_types:
             # Economy seats
@@ -550,7 +656,7 @@ class HopJetAirDataGenerator:
                         )
                         db.add(seat_map)
         
-        db.commit()
+        await db.commit()
 
 # Usage example
 async def main():

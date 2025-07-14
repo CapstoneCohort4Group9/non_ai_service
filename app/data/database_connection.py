@@ -18,7 +18,7 @@ DATABASE_URL = os.getenv(
 
 SYNC_DATABASE_URL = os.getenv(
     "SYNC_DATABASE_URL",
-    "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair"
+    "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair"
 )
 
 # Connection pool configuration

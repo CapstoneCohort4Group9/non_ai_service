@@ -12,22 +12,24 @@ from pathlib import Path
 
 def check_requirements():
     """Check if required packages are installed"""
-    required_packages = [
-        'psycopg2-binary',
-        'psycopg-pool', 
-        'sqlalchemy',
-        'fastapi',
-        'uvicorn',
-        'faker',
-        'pydantic'
-    ]
-    
+    required_packages = {
+        'psycopg2-binary': 'psycopg2',
+        'psycopg-pool': 'psycopg_pool',
+        'sqlalchemy': 'sqlalchemy',
+        'fastapi': 'fastapi',
+        'uvicorn': 'uvicorn',
+        'faker': 'faker',
+        'pydantic': 'pydantic',
+        'asyncpg': 'asyncpg'
+    }
+
     missing_packages = []
-    for package in required_packages:
+    for pkg_name, import_name in required_packages.items():
         try:
-            __import__(package.replace('-', '_'))
+            __import__(import_name)
         except ImportError:
-            missing_packages.append(package)
+            missing_packages.append(pkg_name)
+
     
     if missing_packages:
         print("Missing required packages:")
@@ -110,7 +112,7 @@ def create_env_file(db_config):
     """Create environment file with database configuration"""
     env_content = f"""# HopJetAir Database Configuration
 DATABASE_URL=postgresql+asyncpg://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}
-SYNC_DATABASE_URL=postgresql://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}
+SYNC_DATABASE_URL=postgresql+asyncpg://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}
 
 # Connection Pool Settings
 DB_MIN_CONNECTIONS=5
@@ -133,7 +135,7 @@ async def populate_database():
         from data_generator import HopJetAirDataGenerator
         
         # Use the database URL from environment or default
-        database_url = os.getenv("SYNC_DATABASE_URL", "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair")
+        database_url = os.getenv("SYNC_DATABASE_URL", "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair")
         
         generator = HopJetAirDataGenerator(database_url)
         await generator.populate_database()
@@ -176,17 +178,20 @@ def create_project_structure():
 
 def create_requirements_file():
     """Create requirements.txt file"""
-    requirements = """fastapi==0.104.1
-uvicorn==0.24.0
+    requirements = """fastapi==0.115.12
+uvicorn==0.34.0
 sqlalchemy==2.0.23
-psycopg2-binary==2.9.9
-psycopg-pool==3.2.0
+psycopg[binary]==3.2.6
+psycopg-pool==3.2.6
+httpx==0.28.1
+faker==37.3.0
+python-dotenv==1.1.1
+
 pydantic==2.5.0
-faker==20.1.0
-python-dotenv==1.0.0
 alembic==1.13.0
 pytest==7.4.3
-httpx==0.25.2
+
+asyncpg==0.30.0
 """
     
     Path("requirements.txt").write_text(requirements)

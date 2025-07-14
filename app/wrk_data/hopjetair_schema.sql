@@ -106,9 +106,9 @@ CREATE TABLE passengers (
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
     email VARCHAR(100),
-    phone VARCHAR(20),
+    phone VARCHAR(50),
     date_of_birth DATE,
-    nationality VARCHAR(50),
+    nationality VARCHAR(100),
     passport_number VARCHAR(20),
     passport_expiry DATE,
     frequent_flyer_number VARCHAR(20),
@@ -338,3 +338,9 @@ CREATE INDEX idx_excursion_bookings_reference ON excursion_bookings(booking_refe
 CREATE INDEX idx_booking_segments_booking ON booking_segments(booking_id);
 CREATE INDEX idx_flight_seats_flight ON flight_seats(flight_id);
 CREATE INDEX idx_insurance_policies_booking ON insurance_policies(booking_id);
+
+
+GRANT ALL PRIVILEGES ON DATABASE hopjetair TO hopjetair;
+GRANT ALL ON SCHEMA public TO hopjetair;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO hopjetair;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO hopjetair;

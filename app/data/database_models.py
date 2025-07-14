@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, Time, Decimal, Boolean, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, Time, Boolean, Text, ForeignKey, UniqueConstraint, Numeric
+from decimal import Decimal as PyDecimal # Alias Python's Decimal if you still need it for other purposes, to avoid name collision with SQLAlchemy's DECIMAL/Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -52,8 +53,8 @@ class Airport(Base):
     city = Column(String(50), nullable=False)
     country = Column(String(50), nullable=False)
     timezone = Column(String(50))
-    latitude = Column(Decimal(10, 7))
-    longitude = Column(Decimal(10, 7))
+    latitude = Column(Numeric(10, 7))
+    longitude = Column(Numeric(10, 7))
     created_at = Column(DateTime, default=func.now())
     
     # Relationships
@@ -140,9 +141,9 @@ class Passenger(Base):
     first_name = Column(String(50), nullable=False)
     last_name = Column(String(50), nullable=False)
     email = Column(String(100))
-    phone = Column(String(20))
+    phone = Column(String(50))
     date_of_birth = Column(Date)
-    nationality = Column(String(50))
+    nationality = Column(String(100))
     passport_number = Column(String(20))
     passport_expiry = Column(Date)
     frequent_flyer_number = Column(String(20))
@@ -162,7 +163,7 @@ class Booking(Base):
     booking_reference = Column(String(6), unique=True, nullable=False)
     passenger_id = Column(Integer, ForeignKey('passengers.id'))
     booking_date = Column(DateTime, default=func.now())
-    total_amount = Column(Decimal(10, 2))
+    total_amount = Column(Numeric(10, 2))
     currency = Column(String(3), default='USD')
     status = Column(String(20), default='confirmed')
     booking_source = Column(String(20), default='website')
@@ -225,7 +226,7 @@ class FlightSeat(Base):
     seat_number = Column(String(5), nullable=False)
     passenger_id = Column(Integer, ForeignKey('passengers.id'))
     booking_segment_id = Column(Integer, ForeignKey('booking_segments.id'))
-    seat_fee = Column(Decimal(8, 2), default=0)
+    seat_fee = Column(Numeric(8, 2), default=0)
     status = Column(String(20), default='available')
     created_at = Column(DateTime, default=func.now())
     
@@ -240,8 +241,8 @@ class Baggage(Base):
     id = Column(Integer, primary_key=True)
     booking_segment_id = Column(Integer, ForeignKey('booking_segments.id'))
     baggage_type = Column(String(20))  # carry_on, checked, excess
-    weight_kg = Column(Decimal(5, 2))
-    fee = Column(Decimal(8, 2), default=0)
+    weight_kg = Column(Numeric(5, 2))
+    fee = Column(Numeric(8, 2), default=0)
     tag_number = Column(String(15))
     status = Column(String(20), default='checked_in')
     created_at = Column(DateTime, default=func.now())
@@ -257,8 +258,8 @@ class InsurancePolicy(Base):
     booking_id = Column(Integer, ForeignKey('bookings.id'))
     passenger_id = Column(Integer, ForeignKey('passengers.id'))
     policy_type = Column(String(30))  # flight, trip, comprehensive
-    coverage_amount = Column(Decimal(10, 2))
-    premium = Column(Decimal(8, 2))
+    coverage_amount = Column(Numeric(10, 2))
+    premium = Column(Numeric(8, 2))
     start_date = Column(Date)
     end_date = Column(Date)
     status = Column(String(20), default='active')
@@ -280,7 +281,7 @@ class TripPackage(Base):
     destination_city = Column(String(50))
     destination_country = Column(String(50))
     duration_days = Column(Integer)
-    price_per_person = Column(Decimal(10, 2))
+    price_per_person = Column(Numeric(10, 2))
     includes_flight = Column(Boolean, default=True)
     includes_hotel = Column(Boolean, default=True)
     includes_activities = Column(Boolean, default=False)
@@ -301,7 +302,7 @@ class TripBooking(Base):
     travel_start_date = Column(Date)
     travel_end_date = Column(Date)
     num_passengers = Column(Integer, default=1)
-    total_amount = Column(Decimal(10, 2))
+    total_amount = Column(Numeric(10, 2))
     status = Column(String(20), default='confirmed')
     special_requests = Column(Text)
     created_at = Column(DateTime, default=func.now())
@@ -321,7 +322,7 @@ class Excursion(Base):
     destination_country = Column(String(50))
     description = Column(Text)
     duration_hours = Column(Integer)
-    price_per_person = Column(Decimal(8, 2))
+    price_per_person = Column(Numeric(8, 2))
     category = Column(String(30))  # cultural, adventure, nature, historical
     max_participants = Column(Integer)
     includes_transport = Column(Boolean, default=True)
@@ -342,7 +343,7 @@ class ExcursionBooking(Base):
     booking_date = Column(DateTime, default=func.now())
     excursion_date = Column(Date)
     num_participants = Column(Integer)
-    total_amount = Column(Decimal(8, 2))
+    total_amount = Column(Numeric(8, 2))
     status = Column(String(20), default='confirmed')
     created_at = Column(DateTime, default=func.now())
     
@@ -358,7 +359,7 @@ class Refund(Base):
     trip_booking_id = Column(Integer, ForeignKey('trip_bookings.id'))
     refund_reference = Column(String(10), unique=True, nullable=False)
     refund_type = Column(String(30))  # full, partial, compensation
-    amount = Column(Decimal(10, 2))
+    amount = Column(Numeric(10, 2))
     reason = Column(String(100))
     status = Column(String(20), default='pending')
     requested_date = Column(DateTime, default=func.now())
@@ -379,8 +380,8 @@ class AirlinePolicy(Base):
     route_type = Column(String(20))  # domestic, international
     class_of_service = Column(String(20))
     description = Column(Text)
-    fee_amount = Column(Decimal(8, 2))
-    fee_percentage = Column(Decimal(5, 2))
+    fee_amount = Column(Numeric(8, 2))
+    fee_percentage = Column(Numeric(5, 2))
     conditions = Column(Text)
     effective_from = Column(Date)
     effective_to = Column(Date)
@@ -418,7 +419,7 @@ class CustomerServiceLog(Base):
 
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://username:password@localhost/hopjetair")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://username:password@localhost/hopjetair")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -200,7 +200,7 @@ Popular routes including:
 ```bash
 # Database
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/hopjetair
-SYNC_DATABASE_URL=postgresql://user:pass@localhost:5432/hopjetair
+SYNC_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/hopjetair
 
 # Connection Pool
 DB_MIN_CONNECTIONS=5
