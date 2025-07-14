@@ -4,7 +4,6 @@ sqlalchemy==2.0.23
 psycopg[binary]==3.2.6
 psycopg-pool==3.2.6
 httpx==0.28.1
-faker==37.3.0
 python-dotenv==1.1.1
 
 pydantic==2.5.0
