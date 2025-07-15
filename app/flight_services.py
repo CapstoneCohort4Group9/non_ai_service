@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Any
 import random
 import string
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import select, and_, or_, func
 from .database_models import *
 from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 #done
@@ -18,13 +18,15 @@ class FlightSearchService:
             departure_date = params.get('departure_date', params.get('date'))
             
             # Get airports
-            origin_airport = db.query(Airport).filter(
+            origin_stmt = select(Airport).where(
                 or_(Airport.iata_code == origin, Airport.city.ilike(f"%{origin}%"))
-            ).first()
-            
-            dest_airport = db.query(Airport).filter(
+            )
+            dest_stmt = select(Airport).where(
                 or_(Airport.iata_code == destination, Airport.city.ilike(f"%{destination}%"))
-            ).first()
+            )
+
+            origin_airport = (await db.execute(origin_stmt)).scalars().first()
+            dest_airport = (await db.execute(dest_stmt)).scalars().first()
             
             if not origin_airport or not dest_airport:
                 return {
@@ -43,12 +45,11 @@ class FlightSearchService:
                 search_date = departure_date
             
             # Find route
-            route = db.query(Route).filter(
-                and_(
-                    Route.origin_airport_id == origin_airport.id,
-                    Route.destination_airport_id == dest_airport.id
-                )
-            ).first()
+            route_stmt = select(Route).where(
+                Route.origin_airport_id == origin_airport.id,
+                Route.destination_airport_id == dest_airport.id
+            )
+            route = (await db.execute(route_stmt)).scalars().first()
             
             if not route:
                 return {
@@ -58,20 +59,26 @@ class FlightSearchService:
                 }
             
             # Search flights
-            flights = db.query(Flight).join(Airline).filter(
-                and_(
+            flight_stmt = (
+                select(Flight)
+                .join(Airline)
+                .where(
                     Flight.route_id == route.id,
                     func.date(Flight.scheduled_departure) == search_date,
                     Flight.status.in_(['scheduled', 'boarding'])
                 )
-            ).all()
+            )
+            flights = (await db.execute(flight_stmt)).scalars().all()
+
             
             flight_results = []
             for flight in flights:
                 # Calculate available seats
-                booked_seats = db.query(BookingSegment).filter(
+                booked_stmt = select(func.count()).where(
                     BookingSegment.flight_id == flight.id
-                ).count()
+                )
+                booked_seats = (await db.execute(booked_stmt)).scalar()
+
                 
                 available_seats = flight.aircraft.aircraft_type.total_seats - booked_seats
                 

@@ -1,9 +1,10 @@
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 from contextlib import asynccontextmanager
-from .database_connection import init_database, close_database
+from .database_connection import init_database, close_database, get_db_session
 from .database_models import SessionLocal
 from .service_registry import execute_service_endpoint, get_service_info, check_service_health
 
@@ -988,7 +989,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Comprehensive health check endpoint"""
-    from database_connection import check_database_health
+    from .database_connection import check_database_health
     
     db_healthy = await check_database_health()
     service_health = await check_service_health()
@@ -1018,12 +1019,12 @@ async def handle_endpoint(endpoint_name: str, request_data: dict, db):
 
 # Flight-related endpoints
 @app.post("/search_flight")
-async def search_flight(request: SearchFlightRequest, db = Depends(get_sync_db)):
+async def search_flight(request: SearchFlightRequest, db = Depends(get_db_session)):
     """Search for available flights"""
     return await handle_endpoint("search_flight", request.dict(), db)
 
 @app.post("/search_flights")
-async def search_flights(request: SearchFlightsRequest, db = Depends(get_sync_db)):
+async def search_flights(request: SearchFlightsRequest, db = Depends(get_db_session)):
     """Search flights with advanced filters"""
     return await handle_endpoint("search_flights", request.dict(), db)
 

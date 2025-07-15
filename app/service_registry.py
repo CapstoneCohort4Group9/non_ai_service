@@ -4,6 +4,7 @@ Central registry for all airline business services
 """
 
 # Import all service classes
+from datetime import datetime
 from .flight_services import FlightSearchService, FlightStatusService, FlightAvailabilityService, FlightBookingService, FlightChangeService
 from .booking_services import BookingServices
 from .seat_checkin_services import SeatManagementService, CheckInService, BoardingPassService, CheckInInfoService
