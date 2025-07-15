@@ -8,6 +8,8 @@ python -m venv _env
  .\_env\Scripts\activate
 
  pip install -r requirements.txt
+ 
+ pip install -r .\app\wrk_data\requirements.txt
 
  .\_env\Scripts\deactivate
 ```
