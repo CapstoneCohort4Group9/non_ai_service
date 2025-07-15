@@ -5,8 +5,8 @@ import random
 import string
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func
-from database_models import *
-from database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
+from .database_models import *
+from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 
 class CustomerSupportService:
     @staticmethod

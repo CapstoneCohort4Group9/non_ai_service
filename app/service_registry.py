@@ -4,11 +4,11 @@ Central registry for all airline business services
 """
 
 # Import all service classes
-from flight_services import FlightSearchService, FlightStatusService, FlightAvailabilityService, FlightBookingService, FlightChangeService
-from booking_services import BookingManagementService, BookingCancellationService, BookingModificationService, TimeCheckServices
-from seat_checkin_services import SeatManagementService, CheckInService, BoardingPassService, CheckInInfoService
-from trip_insurance_services import TripPackageService, InsuranceService
-from support_pricing_services import CustomerSupportService, PolicyService, RefundService, BaggageService, PricingService
+from .flight_services import FlightSearchService, FlightStatusService, FlightAvailabilityService, FlightBookingService, FlightChangeService
+from .booking_services import BookingServices
+from .seat_checkin_services import SeatManagementService, CheckInService, BoardingPassService, CheckInInfoService
+from .trip_insurance_services import TripPackageService, InsuranceService
+from .support_pricing_services import CustomerSupportService, PolicyService, RefundService, BaggageService, PricingService
 
 class HopJetAirServiceRegistry:
     """
@@ -25,10 +25,10 @@ class HopJetAirServiceRegistry:
         self.flight_change = FlightChangeService()
         
         # Booking Services
-        self.booking_management = BookingManagementService()
-        self.booking_cancellation = BookingCancellationService()
-        self.booking_modification = BookingModificationService()
-        self.time_checks = TimeCheckServices()
+        self.booking = BookingServices()
+        # self.booking_cancellation = BookingCancellationService()
+        # self.booking_modification = BookingModificationService()
+        # self.time_checks = TimeCheckServices()
         
         # Seat and Check-in Services
         self.seat_management = SeatManagementService()
@@ -71,14 +71,14 @@ SERVICE_ENDPOINTS = {
     'update_flight_date': ('flight_change', 'update_flight_date'),
     
     # Booking Services 8
-    'get_booking_details': ('booking_management', 'get_booking_details'),
-    'check_flight_reservation': ('booking_management', 'check_flight_reservation'),
-    'query_booking_details': ('booking_management', 'query_booking_details'),
-    'retrieve_booking_by_email': ('booking_management', 'retrieve_booking_by_email'),
-    'cancel_booking': ('booking_cancellation', 'cancel_booking'),
-    'send_itinerary_email': ('booking_modification', 'send_itinerary_email'),
-    'check_arrival_time': ('time_checks', 'check_arrival_time'),
-    'check_departure_time': ('time_checks', 'check_departure_time'),
+    'get_booking_details': ('booking', 'get_booking_details'),
+    'check_flight_reservation': ('booking', 'check_flight_reservation'),
+    'query_booking_details': ('booking', 'query_booking_details'),
+    'retrieve_booking_by_email': ('booking', 'retrieve_booking_by_email'),
+    'cancel_booking': ('booking', 'cancel_booking'),
+    'send_itinerary_email': ('booking', 'send_itinerary_email'),
+    'check_arrival_time': ('booking', 'check_arrival_time'),
+    'check_departure_time': ('booking', 'check_departure_time'),
     
     # Seat and Check-in Services 12
     'check_seat_availability': ('seat_management', 'check_seat_availability'),

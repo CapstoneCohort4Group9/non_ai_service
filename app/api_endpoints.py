@@ -3,9 +3,9 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 from contextlib import asynccontextmanager
-from database_connection import init_database, close_database, get_db_session
-from database_models import SessionLocal
-from service_registry import execute_service_endpoint, get_service_info, check_service_health
+from .database_connection import init_database, close_database
+from .database_models import SessionLocal
+from .service_registry import execute_service_endpoint, get_service_info, check_service_health
 
 # Lifespan context manager for startup/shutdown
 @asynccontextmanager
