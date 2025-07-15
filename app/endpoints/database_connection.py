@@ -13,12 +13,7 @@ logger = logging.getLogger(__name__)
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair"
-)
-
-SYNC_DATABASE_URL = os.getenv(
-    "SYNC_DATABASE_URL",
-    "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair"
+    "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair"
 )
 
 # Connection pool configuration
@@ -53,7 +48,7 @@ class DatabaseManager:
             
             # Initialize connection pool for raw queries
             self.pool = AsyncConnectionPool(
-                conninfo=DATABASE_URL.replace("+asyncpg", ""),
+                conninfo=DATABASE_URL,
                 min_size=MIN_CONNECTIONS,
                 max_size=MAX_CONNECTIONS,
                 timeout=30

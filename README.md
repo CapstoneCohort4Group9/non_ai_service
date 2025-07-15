@@ -17,6 +17,8 @@ python -m venv _env
 ## To test it locally
 ```powershell
 uvicorn app.main:app --host 0.0.0.0 --port 8003
+
+uvicorn app.endpoints.api_endpoints.main:app  --reload --port 8000 --host 0.0.0.0
 ```
  
  ```browser
