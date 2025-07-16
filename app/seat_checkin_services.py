@@ -1,89 +1,91 @@
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
 import random
 import string
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy.orm import joinedload
+from sqlalchemy import select, and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from .database_models import *
 from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 
 class SeatManagementService:
     @staticmethod
-    async def check_seat_availability(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_seat_availability(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check available seats on a flight"""
         try:
-            booking_ref = params.get('booking_reference')
-            flight_number = params.get('flight_number')
-            seat_preference = params.get('seat_preference', 'any')
-            
-            # Get booking and flight info
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            flight_number = params.get("flight_number")
+            seat_preference = params.get("seat_preference", "any")
+
+            # 🔍 Get booking with passenger preloaded
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Get the flight
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+
+            # 🔗 Get flight segment with aircraft + type joined
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.aircraft)
+                    .joinedload(Aircraft.aircraft_type)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
             if not segment:
                 return {"status": "error", "message": "No flight segments found"}
-            
+
             flight = segment.flight
             aircraft_type = flight.aircraft.aircraft_type
-            
-            # Get seat map
-            seat_map_query = db.query(SeatMap).filter_by(aircraft_type_id=aircraft_type.id)
-            
-            # Filter by passenger's class
             passenger_class = segment.class_of_service
-            seat_map_query = seat_map_query.filter_by(class_of_service=passenger_class)
-            
-            # Apply seat preference filter
-            if seat_preference and seat_preference != 'any':
-                if seat_preference == 'window':
-                    seat_map_query = seat_map_query.filter_by(seat_type='window')
-                elif seat_preference == 'aisle':
-                    seat_map_query = seat_map_query.filter_by(seat_type='aisle')
-                elif seat_preference == 'exit':
-                    seat_map_query = seat_map_query.filter_by(is_exit_row=True)
-            
-            available_seats = seat_map_query.all()
-            
-            # Get occupied seats
-            occupied_seats = db.query(FlightSeat).filter_by(
-                flight_id=flight.id,
-                status='occupied'
-            ).all()
-            
-            occupied_seat_numbers = {seat.seat_number for seat in occupied_seats}
-            
-            # Filter out occupied and blocked seats
+
+            # 🪑 Get seat map for aircraft + class + preference
+            seat_map_stmt = select(SeatMap).where(
+                SeatMap.aircraft_type_id == aircraft_type.id,
+                SeatMap.class_of_service == passenger_class
+            )
+
+            if seat_preference and seat_preference != "any":
+                if seat_preference == "window":
+                    seat_map_stmt = seat_map_stmt.where(SeatMap.seat_type == "window")
+                elif seat_preference == "aisle":
+                    seat_map_stmt = seat_map_stmt.where(SeatMap.seat_type == "aisle")
+                elif seat_preference == "exit":
+                    seat_map_stmt = seat_map_stmt.where(SeatMap.is_exit_row == True)
+
+            available_seats = (await db.execute(seat_map_stmt)).scalars().all()
+
+            # 🚫 Get occupied seats
+            occupied_stmt = select(FlightSeat).where(
+                FlightSeat.flight_id == flight.id,
+                FlightSeat.status == "occupied"
+            )
+            occupied = (await db.execute(occupied_stmt)).scalars().all()
+            occupied_numbers = {s.seat_number for s in occupied}
+
+            # 🎯 Filter seat map against occupied + blocked
             free_seats = []
             for seat in available_seats:
-                if seat.seat_number not in occupied_seat_numbers and not seat.is_blocked:
-                    seat_fee = 0
-                    if seat.extra_legroom:
-                        seat_fee = 25
-                    elif seat.is_exit_row:
-                        seat_fee = 15
-                    
-                    seat_info = {
-                        'seat_number': seat.seat_number,
-                        'seat_type': seat.seat_type,
-                        'extra_legroom': seat.extra_legroom,
-                        'exit_row': seat.is_exit_row,
-                        'fee': seat_fee,
-                        'available': True
-                    }
-                    free_seats.append(seat_info)
-            
-            # Organize by rows for better display
+                if seat.seat_number not in occupied_numbers and not seat.is_blocked:
+                    seat_fee = 25 if seat.extra_legroom else 15 if seat.is_exit_row else 0
+                    free_seats.append({
+                        "seat_number": seat.seat_number,
+                        "seat_type": seat.seat_type,
+                        "extra_legroom": seat.extra_legroom,
+                        "exit_row": seat.is_exit_row,
+                        "fee": seat_fee,
+                        "available": True
+                    })
+
+            # 🪑 Organize by row
             seat_rows = {}
             for seat in free_seats:
-                row = seat['seat_number'][:-1]  # Remove letter
-                if row not in seat_rows:
-                    seat_rows[row] = []
-                seat_rows[row].append(seat)
-            
+                row = seat["seat_number"][:-1]
+                seat_rows.setdefault(row, []).append(seat)
+
             return {
                 "status": "success",
                 "flight_number": flight.flight_number,
@@ -95,38 +97,70 @@ class SeatManagementService:
                 "total_available": len(free_seats),
                 "seat_map_info": {
                     "total_seats": aircraft_type.total_seats,
-                    "occupied_seats": len(occupied_seat_numbers),
+                    "occupied_seats": len(occupied_numbers),
                     "available_seats": len(free_seats)
                 }
             }
-            
+
         except BookingNotFoundError as e:
             return {"status": "error", "message": str(e)}
         except Exception as e:
             return {"status": "error", "message": f"Seat availability check failed: {str(e)}"}
     
     @staticmethod
-    async def change_seat(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def change_seat(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Change passenger seat assignment"""
         try:
             booking_ref = params.get('booking_reference')
             new_seat = params.get('new_seat')
             
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            # 🔍 Get booking
+            # We need to load the booking and its associated segments.
+            # Use joinedload for Booking.segments to fetch them in one query.
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
             
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+            # 🔗 Get flight segment with flight, aircraft, and aircraft_type joined
+            # Assuming a booking has one primary segment for seat changes, or the first one is relevant.
+            # If a booking can have multiple segments and you need to specify which,
+            # add a parameter (e.g., segment_id) and filter.
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.aircraft)
+                    .joinedload(Aircraft.aircraft_type),
+                    joinedload(BookingSegment.passenger) # Load passenger for passenger_id
+                )
+                .where(BookingSegment.booking_id == booking.id)
+                # Add additional filter if a specific segment is needed, e.g., for a particular flight
+                # .where(BookingSegment.flight.has(Flight.flight_number == flight_number_from_params))
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
+            
             if not segment:
-                return {"status": "error", "message": "No flight segments found"}
+                return {"status": "error", "message": "No flight segments found for this booking."}
             
             flight = segment.flight
+            if not flight:
+                return {"status": "error", "message": "Flight information not found for the booking segment."}
+
+            aircraft = flight.aircraft
+            if not aircraft:
+                return {"status": "error", "message": "Aircraft information not found for the flight."}
+
+            aircraft_type = aircraft.aircraft_type
+            if not aircraft_type:
+                return {"status": "error", "message": "Aircraft type information not found for the aircraft."}
             
             # Check if new seat is available
-            existing_seat = db.query(FlightSeat).filter_by(
-                flight_id=flight.id,
-                seat_number=new_seat
-            ).first()
+            existing_seat_stmt = select(FlightSeat).where(
+                FlightSeat.flight_id == flight.id,
+                FlightSeat.seat_number == new_seat
+            )
+            existing_seat = (await db.execute(existing_seat_stmt)).scalars().first()
             
             if existing_seat and existing_seat.status == 'occupied':
                 return {
@@ -135,15 +169,16 @@ class SeatManagementService:
                 }
             
             # Check seat map for fees and validity
-            seat_map_entry = db.query(SeatMap).filter_by(
-                aircraft_type_id=flight.aircraft.aircraft_type.id,
-                seat_number=new_seat
-            ).first()
+            seat_map_entry_stmt = select(SeatMap).where(
+                SeatMap.aircraft_type_id == aircraft_type.id,
+                SeatMap.seat_number == new_seat
+            )
+            seat_map_entry = (await db.execute(seat_map_entry_stmt)).scalars().first()
             
             if not seat_map_entry:
                 return {
                     "status": "error",
-                    "message": f"Seat {new_seat} does not exist on this aircraft"
+                    "message": f"Seat {new_seat} does not exist on this aircraft type ({aircraft_type.model})"
                 }
             
             # Check class compatibility
@@ -154,47 +189,52 @@ class SeatManagementService:
                 }
             
             # Calculate seat fee
-            seat_fee = 0
+            seat_fee = Decimal('0.00')
             if seat_map_entry.extra_legroom:
-                seat_fee = 25
+                seat_fee = Decimal('25.00')
             elif seat_map_entry.is_exit_row:
-                seat_fee = 15
+                seat_fee = Decimal('15.00')
             
-            # Update seat assignment
+            # Update seat assignment on the BookingSegment
             old_seat = segment.seat_number
             segment.seat_number = new_seat
             
-            # Update flight seat records
+            # Update FlightSeat records
+            # If there's an existing FlightSeat record for the new_seat, update it.
             if existing_seat:
                 existing_seat.passenger_id = segment.passenger_id
                 existing_seat.booking_segment_id = segment.id
                 existing_seat.status = 'occupied'
-                existing_seat.seat_fee = Decimal(str(seat_fee))
+                existing_seat.seat_fee = seat_fee
             else:
+                # If no existing FlightSeat record, create a new one.
                 new_flight_seat = FlightSeat(
                     flight_id=flight.id,
                     seat_number=new_seat,
-                    passenger_id=segment.passenger_id,
+                    passenger_id=segment.passenger_id, # Assuming passenger_id is directly on segment or accessible
                     booking_segment_id=segment.id,
-                    seat_fee=Decimal(str(seat_fee)),
+                    seat_fee=seat_fee,
                     status='occupied'
                 )
                 db.add(new_flight_seat)
             
-            # Free up old seat
+            # Free up old seat if it existed and was assigned
             if old_seat:
-                old_flight_seat = db.query(FlightSeat).filter_by(
-                    flight_id=flight.id,
-                    seat_number=old_seat
-                ).first()
+                old_flight_seat_stmt = select(FlightSeat).where(
+                    FlightSeat.flight_id == flight.id,
+                    FlightSeat.seat_number == old_seat
+                )
+                old_flight_seat = (await db.execute(old_flight_seat_stmt)).scalars().first()
+                
                 if old_flight_seat:
                     old_flight_seat.passenger_id = None
                     old_flight_seat.booking_segment_id = None
                     old_flight_seat.status = 'available'
-                    old_flight_seat.seat_fee = 0
+                    old_flight_seat.seat_fee = Decimal('0.00') # Reset fee for available seat
             
-            db.commit()
-            
+            await db.commit()
+            await db.refresh(segment) # Refresh segment to ensure changes are reflected in the object
+
             return {
                 "status": "success",
                 "message": f"Seat changed successfully from {old_seat or 'unassigned'} to {new_seat}",
@@ -206,83 +246,112 @@ class SeatManagementService:
                     "seat_type": seat_map_entry.seat_type,
                     "extra_legroom": seat_map_entry.extra_legroom,
                     "exit_row": seat_map_entry.is_exit_row,
-                    "fee": seat_fee
+                    "fee": float(seat_fee) # Convert Decimal to float for JSON serialization
                 },
-                "total_fees": seat_fee
+                "total_fees": float(seat_fee) # Convert Decimal to float
             }
             
         except BookingNotFoundError as e:
+            await db.rollback() # Rollback in case of an error before commit
             return {"status": "error", "message": str(e)}
         except Exception as e:
-            db.rollback()
+            await db.rollback() # Rollback in case of any other exception
+            # In a real application, you should log the full exception traceback for debugging.
             return {"status": "error", "message": f"Seat change failed: {str(e)}"}
     
     @staticmethod
-    async def choose_seat(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def choose_seat(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Choose seat during booking or check-in"""
         try:
-            booking_ref = params.get('booking_reference')
-            seat_number = params.get('seat_number')
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            seat_number = params.get("seat_number")
+
+            # Get booking
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+
+            # Get first flight segment (with flight preloaded)
+            segment_stmt = (
+                select(BookingSegment)
+                .options(joinedload(BookingSegment.flight))
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
+
             if not segment:
                 return {"status": "error", "message": "No flight segments found"}
-            
-            # Use change_seat logic for seat selection
+
+            # Delegate to change_seat logic
             result = await SeatManagementService.change_seat(db, {
-                'booking_reference': booking_ref,
-                'new_seat': seat_number
+                "booking_reference": booking_ref,
+                "new_seat": seat_number
             })
-            
-            if result['status'] == 'success':
-                result['message'] = f"Seat {seat_number} successfully selected"
-                result['confirmation'] = f"Your seat {seat_number} is confirmed for flight {result['flight_number']}"
-            
+
+            if result["status"] == "success":
+                result["message"] = f"Seat {seat_number} successfully selected"
+                result["confirmation"] = f"Your seat {seat_number} is confirmed for flight {result['flight_number']}"
+
             return result
-            
+
         except Exception as e:
             return {"status": "error", "message": f"Seat selection failed: {str(e)}"}
 
 class CheckInService:
     @staticmethod
-    async def check_in_passenger(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_in_passenger(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check in passenger for flight"""
         try:
-            booking_ref = params.get('booking_reference')
-            last_name = params.get('last_name')
-            flight_number = params.get('flight_number')
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            last_name = params.get("last_name")
+            flight_number = params.get("flight_number")
+
+            # Fetch booking with passenger preloaded
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Verify last name if provided
+
             if last_name and last_name.lower() not in booking.passenger.last_name.lower():
-                return {
-                    "status": "error",
-                    "message": "Last name does not match booking"
-                }
-            
-            # Get booking segments
-            segments_query = db.query(BookingSegment).filter_by(booking_id=booking.id)
+                return {"status": "error", "message": "Last name does not match booking"}
+
+            # Load booking segments with flight + route + aircraft eager-loaded
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.destination_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.aircraft)
+                    .joinedload(Aircraft.aircraft_type)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
             if flight_number:
-                segments_query = segments_query.join(Flight).filter(Flight.flight_number == flight_number)
-            
-            segments = segments_query.all()
-            
+                segment_stmt = segment_stmt.where(BookingSegment.flight.has(Flight.flight_number == flight_number))
+
+            segments = (await db.execute(segment_stmt)).scalars().all()
             if not segments:
                 return {"status": "error", "message": "No flight segments found"}
-            
+
             checked_in_segments = []
+
             for segment in segments:
                 flight = segment.flight
-                
-                # Check if already checked in
-                if segment.check_in_status == 'checked_in':
+                route = flight.route
+                time_to_departure = flight.scheduled_departure - datetime.now()
+
+                if segment.check_in_status == "checked_in":
                     checked_in_segments.append({
                         "flight_number": flight.flight_number,
                         "status": "already_checked_in",
@@ -290,10 +359,8 @@ class CheckInService:
                         "check_in_time": "Previously completed"
                     })
                     continue
-                
-                # Check timing (24 hours before departure)
-                time_to_departure = flight.scheduled_departure - datetime.now()
-                if time_to_departure.total_seconds() > 24 * 3600:
+
+                if time_to_departure.total_seconds() > 86400:
                     checked_in_segments.append({
                         "flight_number": flight.flight_number,
                         "status": "too_early",
@@ -301,9 +368,7 @@ class CheckInService:
                         "opens_at": (flight.scheduled_departure - timedelta(hours=24)).isoformat()
                     })
                     continue
-                
-                # Check if too late (2 hours before departure for international, 1 hour for domestic)
-                route = flight.route
+
                 cutoff_hours = 2 if route.distance_km > 2000 else 1
                 if time_to_departure.total_seconds() < cutoff_hours * 3600:
                     checked_in_segments.append({
@@ -313,35 +378,30 @@ class CheckInService:
                         "closed_at": (flight.scheduled_departure - timedelta(hours=cutoff_hours)).isoformat()
                     })
                     continue
-                
-                # Perform check-in
-                segment.check_in_status = 'checked_in'
-                
-                # Assign seat if not already assigned
+
+                # Mark as checked in
+                segment.check_in_status = "checked_in"
+
                 if not segment.seat_number:
-                    # Find available seat
-                    available_seats = db.query(SeatMap).filter_by(
-                        aircraft_type_id=flight.aircraft.aircraft_type.id,
-                        class_of_service=segment.class_of_service
-                    ).limit(10).all()
-                    
-                    if available_seats:
-                        # Prefer aisle seats for automatic assignment
-                        aisle_seats = [s for s in available_seats if s.seat_type == 'aisle']
-                        selected_seat = aisle_seats[0] if aisle_seats else available_seats[0]
-                        segment.seat_number = selected_seat.seat_number
-                        
-                        # Create flight seat record
-                        flight_seat = FlightSeat(
+                    seat_stmt = select(SeatMap).where(
+                        SeatMap.aircraft_type_id == flight.aircraft.aircraft_type.id,
+                        SeatMap.class_of_service == segment.class_of_service
+                    ).limit(10)
+                    available_seats = (await db.execute(seat_stmt)).scalars().all()
+
+                    aisle_seats = [s for s in available_seats if s.seat_type == "aisle"]
+                    selected = aisle_seats[0] if aisle_seats else available_seats[0] if available_seats else None
+                    if selected:
+                        segment.seat_number = selected.seat_number
+                        seat_record = FlightSeat(
                             flight_id=flight.id,
-                            seat_number=selected_seat.seat_number,
+                            seat_number=selected.seat_number,
                             passenger_id=segment.passenger_id,
                             booking_segment_id=segment.id,
-                            status='occupied'
+                            status="occupied"
                         )
-                        db.add(flight_seat)
-                
-                route = flight.route
+                        db.add(seat_record)
+
                 checked_in_segments.append({
                     "flight_number": flight.flight_number,
                     "status": "checked_in",
@@ -353,10 +413,10 @@ class CheckInService:
                     "boarding_time": (flight.scheduled_departure - timedelta(minutes=30)).isoformat(),
                     "check_in_time": datetime.now().isoformat()
                 })
-            
-            db.commit()
-            
+
+            await db.commit()
             passenger = booking.passenger
+
             return {
                 "status": "success",
                 "booking_reference": booking_ref,
@@ -371,91 +431,122 @@ class CheckInService:
                     "Download boarding pass or print at kiosk"
                 ]
             }
-            
+
         except BookingNotFoundError as e:
             return {"status": "error", "message": str(e)}
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             return {"status": "error", "message": f"Check-in failed: {str(e)}"}
     
     @staticmethod
-    async def check_in(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_in(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Basic check-in function"""
         try:
-            flight_number = params.get('flight_number')
-            last_name = params.get('last_name')
-            departure_airport = params.get('departure_airport')
-            
-            # Find passenger by last name and flight
-            passenger = db.query(Passenger).filter(
+            flight_number = params.get("flight_number")
+            last_name = params.get("last_name")
+            departure_airport = params.get("departure_airport")  # unused for now
+
+            # 🧍 Find passenger by last name
+            passenger_stmt = select(Passenger).where(
                 Passenger.last_name.ilike(f"%{last_name}%")
-            ).first()
-            
+            )
+            passenger = (await db.execute(passenger_stmt)).scalars().first()
             if not passenger:
                 return {"status": "error", "message": f"Passenger {last_name} not found"}
-            
-            # Find booking segment for this flight
-            segment = db.query(BookingSegment).join(Flight).join(Booking).filter(
-                and_(
+
+            # ✈️ Find booking segment by flight number and passenger ID
+            segment_stmt = (
+                select(BookingSegment)
+                .options(joinedload(BookingSegment.booking))
+                .join(BookingSegment.flight)
+                .join(BookingSegment.booking)
+                .where(
                     Flight.flight_number == flight_number,
                     Booking.passenger_id == passenger.id
                 )
-            ).first()
-            
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
             if not segment:
-                return {"status": "error", "message": f"No booking found for {last_name} on flight {flight_number}"}
-            
-            # Use check_in_passenger logic
+                return {
+                    "status": "error",
+                    "message": f"No booking found for {last_name} on flight {flight_number}"
+                }
+
+            # ✅ Delegate to detailed check-in logic
             result = await CheckInService.check_in_passenger(db, {
-                'booking_reference': segment.booking.booking_reference,
-                'last_name': last_name,
-                'flight_number': flight_number
+                "booking_reference": segment.booking.booking_reference,
+                "last_name": last_name,
+                "flight_number": flight_number
             })
-            
+
             return result
-            
+
         except Exception as e:
             return {"status": "error", "message": f"Check-in failed: {str(e)}"}
     
     @staticmethod
-    async def check_flight_checkin_status(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_flight_checkin_status(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check flight check-in status"""
         try:
-            booking_ref = params.get('booking_reference')
-            flight_number = params.get('flight_number')
-            confirmation_number = params.get('confirmation_number')
-            
-            # Use booking reference or confirmation number
+            booking_ref = params.get("booking_reference")
+            flight_number = params.get("flight_number")
+            confirmation_number = params.get("confirmation_number")
+
             search_ref = booking_ref or confirmation_number
-            
-            booking = db.query(Booking).filter_by(booking_reference=search_ref).first()
+
+            # Fetch booking with passenger
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == search_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
             if not booking:
                 raise BookingNotFoundError(f"Booking {search_ref} not found")
-            
-            # Get specific flight segment
-            segments_query = db.query(BookingSegment).filter_by(booking_id=booking.id)
+
+            # Load booking segments with flight + route eager-loaded
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.destination_airport)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+
             if flight_number:
-                segments_query = segments_query.join(Flight).filter(Flight.flight_number == flight_number)
-            
-            segments = segments_query.all()
-            
+                segment_stmt = segment_stmt.where(
+                    BookingSegment.flight.has(Flight.flight_number == flight_number)
+                )
+
+            segments = (await db.execute(segment_stmt)).scalars().all()
             if not segments:
                 return {"status": "error", "message": "No flight segments found"}
-            
+
+            now = datetime.now()
             segment_statuses = []
+
             for segment in segments:
                 flight = segment.flight
                 route = flight.route
-                
-                # Determine check-in window
                 departure_time = flight.scheduled_departure
+
                 checkin_opens = departure_time - timedelta(hours=24)
                 cutoff_hours = 2 if route.distance_km > 2000 else 1
                 checkin_closes = departure_time - timedelta(hours=cutoff_hours)
-                
-                now = datetime.now()
                 checkin_available = checkin_opens <= now <= checkin_closes
-                
+
+                status_message = (
+                    "Check-in completed" if segment.check_in_status == "checked_in" else
+                    "Check-in not yet available" if now < checkin_opens else
+                    "Check-in closed - contact gate agent" if now > checkin_closes else
+                    "Ready for check-in"
+                )
+
                 segment_info = {
                     "flight_number": flight.flight_number,
                     "route": f"{route.origin_airport.iata_code} → {route.destination_airport.iata_code}",
@@ -469,31 +560,25 @@ class CheckInService:
                         "opens": checkin_opens.isoformat(),
                         "closes": checkin_closes.isoformat(),
                         "currently_available": checkin_available
-                    }
+                    },
+                    "status_message": status_message
                 }
-                
-                if segment.check_in_status == 'checked_in':
+
+                if segment.check_in_status == "checked_in":
                     segment_info["boarding_time"] = (departure_time - timedelta(minutes=30)).isoformat()
-                    segment_info["status_message"] = "Check-in completed"
-                elif not checkin_available and now < checkin_opens:
-                    segment_info["status_message"] = "Check-in not yet available"
-                elif not checkin_available and now > checkin_closes:
-                    segment_info["status_message"] = "Check-in closed - contact gate agent"
-                else:
-                    segment_info["status_message"] = "Ready for check-in"
-                
+
                 segment_statuses.append(segment_info)
-            
+
             passenger = booking.passenger
             return {
                 "status": "success",
                 "booking_reference": search_ref,
                 "passenger_name": f"{passenger.first_name} {passenger.last_name}",
-                "overall_status": "checked_in" if all(s["check_in_status"] == "checked_in" for s in segments) else "pending",
+                "overall_status": "checked_in" if all(s.check_in_status == "checked_in" for s in segments) else "pending",
                 "segments": segment_statuses,
                 "can_check_in_online": any(s["check_in_window"]["currently_available"] for s in segment_statuses)
             }
-            
+
         except BookingNotFoundError as e:
             return {"status": "error", "message": str(e)}
         except Exception as e:
@@ -501,51 +586,72 @@ class CheckInService:
 
 class BoardingPassService:
     @staticmethod
-    async def get_boarding_pass(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_boarding_pass(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get boarding pass for checked-in passenger"""
         try:
-            booking_ref = params.get('booking_reference')
-            flight_number = params.get('flight_number')
-            passenger_name = params.get('passenger_name')
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            flight_number = params.get("flight_number")
+            passenger_name = params.get("passenger_name")
+
+            # Get booking with passenger preloaded
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Find the specific segment
-            segment_query = db.query(BookingSegment).filter_by(booking_id=booking.id)
+
+            # Get booking segment with flight, route, and aircraft preloaded
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.destination_airport),
+                    joinedload(BookingSegment.flight)
+                        .joinedload(Flight.aircraft)
+                        .joinedload(Aircraft.aircraft_type)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
             if flight_number:
-                segment_query = segment_query.join(Flight).filter(Flight.flight_number == flight_number)
-            
-            segment = segment_query.first()
-            
+                segment_stmt = segment_stmt.where(
+                    BookingSegment.flight.has(Flight.flight_number == flight_number)
+                )
+
+            segment = (await db.execute(segment_stmt)).scalars().first()
             if not segment:
                 return {"status": "error", "message": f"Flight {flight_number} not found in booking"}
-            
-            if segment.check_in_status != 'checked_in':
+
+            if segment.check_in_status != "checked_in":
                 return {
                     "status": "error",
                     "message": "Passenger not checked in. Please check in first.",
                     "check_in_available": True
                 }
-            
-            # Mark boarding pass as issued
+
+            # Mark boarding pass issued
             segment.boarding_pass_issued = True
-            db.commit()
-            
+            await db.commit()
+
             flight = segment.flight
             route = flight.route
             passenger = booking.passenger
-            
-            # Generate boarding pass data
+
             boarding_pass = {
                 "passenger_name": f"{passenger.first_name} {passenger.last_name}",
                 "booking_reference": booking_ref,
                 "flight_details": {
                     "flight_number": flight.flight_number,
-                    "date": flight.scheduled_departure.strftime('%Y-%m-%d'),
-                    "departure_time": flight.scheduled_departure.strftime('%H:%M'),
-                    "boarding_time": (flight.scheduled_departure - timedelta(minutes=30)).strftime('%H:%M')
+                    "date": flight.scheduled_departure.strftime("%Y-%m-%d"),
+                    "departure_time": flight.scheduled_departure.strftime("%H:%M"),
+                    "boarding_time": (flight.scheduled_departure - timedelta(minutes=30)).strftime("%H:%M")
                 },
                 "route": {
                     "origin": {
@@ -572,7 +678,7 @@ class BoardingPassService:
                 "frequent_flyer": passenger.frequent_flyer_number,
                 "baggage_allowance": f"{segment.baggage_allowance_kg}kg"
             }
-            
+
             return {
                 "status": "success",
                 "boarding_pass": boarding_pass,
@@ -591,32 +697,35 @@ class BoardingPassService:
                     "Arrive at gate 30 minutes before departure"
                 ]
             }
-            
+
         except BookingNotFoundError as e:
             return {"status": "error", "message": str(e)}
         except Exception as e:
-            return {"status": "error", "message": f"Boarding pass generation failed: {str(e)}"}
+            await db.rollback()
+            return {"status": "error", "message": f"Boarding pass generation failed: {str(e)}"
+            }
     
     @staticmethod
-    async def get_boarding_pass_pdf(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_boarding_pass_pdf(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get boarding pass in PDF format"""
         try:
-            booking_ref = params.get('booking_reference')
-            flight_number = params.get('flight_number')
-            email = params.get('email')
-            
-            # Get standard boarding pass data
+            booking_ref = params.get("booking_reference")
+            flight_number = params.get("flight_number")
+            email = params.get("email")
+
+            # Delegate to standard boarding pass provider
             boarding_pass_result = await BoardingPassService.get_boarding_pass(db, {
-                'booking_reference': booking_ref,
-                'flight_number': flight_number
+                "booking_reference": booking_ref,
+                "flight_number": flight_number
             })
-            
-            if boarding_pass_result['status'] != 'success':
+
+            if boarding_pass_result.get("status") != "success":
                 return boarding_pass_result
-            
-            # Enhance with PDF-specific information
-            boarding_pass_data = boarding_pass_result['boarding_pass']
-            
+
+            boarding_pass_data = boarding_pass_result.get("boarding_pass", {})
+            flight_info = boarding_pass_data.get("flight_details", {})
+            flight_number_safe = flight_info.get("flight_number", flight_number or "Unknown")
+
             return {
                 "status": "success",
                 "boarding_pass": boarding_pass_data,
@@ -633,42 +742,51 @@ class BoardingPassService:
                 "email_option": {
                     "available": True,
                     "recipient": email or "passenger@example.com",
-                    "subject": f"Boarding Pass - Flight {boarding_pass_data['flight_details']['flight_number']}"
+                    "subject": f"Boarding Pass - Flight {flight_number_safe}"
                 }
             }
-            
+
         except Exception as e:
-            return {"status": "error", "message": f"PDF boarding pass generation failed: {str(e)}"}
+            return {
+                "status": "error",
+                "message": f"PDF boarding pass generation failed: {str(e)}"
+            }
     
     @staticmethod
-    async def send_boarding_pass_email(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_boarding_pass_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Send boarding pass via email"""
         try:
-            booking_ref = params.get('booking_reference')
-            passenger_name = params.get('passenger_name')
-            flight_number = params.get('flight_number')
-            flight_date = params.get('flight_date')
-            
-            # Verify booking exists and get passenger email
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            passenger_name = params.get("passenger_name")
+            flight_number = params.get("flight_number")
+            flight_date = params.get("flight_date")  # unused
+
+            # 🔍 Get booking with passenger preloaded
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
             if not booking:
                 return {"status": "error", "message": f"Booking {booking_ref} not found"}
-            
+
             passenger = booking.passenger
             email_address = passenger.email or "passenger@example.com"
-            
-            # Get boarding pass data
+
+            # ✉️ Get boarding pass data
             boarding_pass_result = await BoardingPassService.get_boarding_pass(db, {
-                'booking_reference': booking_ref,
-                'flight_number': flight_number
+                "booking_reference": booking_ref,
+                "flight_number": flight_number
             })
-            
-            if boarding_pass_result['status'] != 'success':
+
+            if boarding_pass_result.get("status") != "success":
                 return {
                     "status": "error",
                     "message": "Cannot send boarding pass - passenger not checked in"
                 }
-            
+
+            # Compose final response
             return {
                 "status": "success",
                 "booking_reference": booking_ref,
@@ -694,79 +812,90 @@ class BoardingPassService:
                     "Important travel reminders"
                 ]
             }
-            
+
         except Exception as e:
             return {"status": "error", "message": f"Email sending failed: {str(e)}"}
     
     @staticmethod
-    async def verify_booking_and_get_boarding_pass(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def verify_booking_and_get_boarding_pass(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Verify booking details and provide boarding pass"""
         try:
-            flight_number = params.get('flight_number')
-            last_name = params.get('last_name')
-            first_initial = params.get('first_initial')
-            
-            # Find passenger by name
-            passenger = db.query(Passenger).filter(
+            flight_number = params.get("flight_number")
+            last_name = params.get("last_name")
+            first_initial = params.get("first_initial")
+
+            # 🔍 Find passenger by name match
+            passenger_stmt = select(Passenger).where(
                 and_(
                     Passenger.last_name.ilike(f"%{last_name}%"),
                     Passenger.first_name.ilike(f"{first_initial}%")
                 )
-            ).first()
-            
+            )
+            passenger = (await db.execute(passenger_stmt)).scalars().first()
+
             if not passenger:
                 return {
                     "status": "error",
                     "message": f"Passenger {first_initial}. {last_name} not found"
                 }
-            
-            # Find booking for this flight
-            segment = db.query(BookingSegment).join(Flight).join(Booking).filter(
-                and_(
+
+            # ✈️ Find matching booking segment with flight + booking preloaded
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.booking).joinedload(Booking.passenger),
+                    joinedload(BookingSegment.flight)
+                )
+                .join(BookingSegment.flight)
+                .join(BookingSegment.booking)
+                .where(
                     Flight.flight_number == flight_number,
                     Booking.passenger_id == passenger.id
                 )
-            ).first()
-            
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
+
             if not segment:
                 return {
                     "status": "error",
                     "message": f"No booking found for {first_initial}. {last_name} on flight {flight_number}"
                 }
-            
+
             booking = segment.booking
             flight = segment.flight
-            
-            # Verify passenger is checked in
-            if segment.check_in_status != 'checked_in':
+
+            if segment.check_in_status != "checked_in":
                 return {
                     "status": "error",
                     "message": "Passenger not checked in for this flight",
                     "booking_reference": booking.booking_reference,
                     "check_in_required": True
                 }
-            
-            # Get boarding pass
+
+            # 🎫 Get boarding pass details
             boarding_pass_result = await BoardingPassService.get_boarding_pass(db, {
-                'booking_reference': booking.booking_reference,
-                'flight_number': flight_number
+                "booking_reference": booking.booking_reference,
+                "flight_number": flight_number
             })
-            
-            if boarding_pass_result['status'] == 'success':
-                boarding_pass_result['verification'] = {
+
+            if boarding_pass_result.get("status") == "success":
+                boarding_pass_result["verification"] = {
                     "passenger_verified": True,
                     "booking_verified": True,
                     "check_in_verified": True,
                     "verification_method": "name_and_flight"
                 }
-            
+
             return boarding_pass_result
-            
+
         except Exception as e:
-            return {"status": "error", "message": f"Verification and boarding pass retrieval failed: {str(e)}"}
+            return {
+                "status": "error",
+                "message": f"Verification and boarding pass retrieval failed: {str(e)}"
+            }
     
     # @staticmethod
-    # async def resend_boarding_pass(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    # async def resend_boarding_pass(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
     #     """Resend boarding pass to passenger email"""
     #     try:
     #         email = params.get('email')
@@ -835,7 +964,7 @@ class BoardingPassService:
 
 class CheckInInfoService:
     @staticmethod
-    async def get_check_in_info(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_check_in_info(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get check-in information for airport or airline"""
         try:
             airport = params.get('airport')
@@ -918,7 +1047,7 @@ class CheckInInfoService:
             return {"status": "error", "message": f"Check-in info retrieval failed: {str(e)}"}
     
     @staticmethod
-    async def query_airport_checkin_info(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def query_airport_checkin_info(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query specific airport check-in information"""
         try:
             airport_code = params.get('airport_code')
@@ -1013,7 +1142,7 @@ class CheckInInfoService:
             return {"status": "error", "message": f"Airport info query failed: {str(e)}"}
     
     # @staticmethod
-    # async def get_airline_checkin_baggage_info(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    # async def get_airline_checkin_baggage_info(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
     #     """Get airline-specific check-in and baggage information"""
     #     try:
     #         airline = params.get('airline', 'HopJetAir')

@@ -529,36 +529,50 @@ class BookingServices:
     
     @staticmethod
     async def send_itinerary_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 6: Send complete itinerary via email
-        /send_itinerary_email
-        """
+        """Send complete itinerary via email"""
         try:
-            booking_ref = params.get('booking_reference')
-            email = params.get('email')
-            
+            booking_ref = params.get("booking_reference")
+            email = params.get("email")
+
             if not booking_ref:
-                return {
-                    "status": "error",
-                    "message": "Booking reference is required"
-                }
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                return {"status": "error", "message": "Booking reference is required"}
+
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
+
             passenger = booking.passenger
             recipient_email = email or passenger.email
-            
+
             if not recipient_email:
-                return {
-                    "status": "error",
-                    "message": "Email address is required"
-                }
-            
-            # Get all segments for itinerary
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
-            
+                return {"status": "error", "message": "Email address is required"}
+
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.airline),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.aircraft)
+                    .joinedload(Aircraft.aircraft_type),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.destination_airport)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+                .order_by(BookingSegment.id.asc())
+            )
+            segments = (await db.execute(segment_stmt)).scalars().all()
+
             itinerary_details = {
                 "booking_reference": booking_ref,
                 "passenger_name": f"{passenger.first_name} {passenger.last_name}",
@@ -569,11 +583,11 @@ class BookingServices:
                 "trip_type": booking.trip_type,
                 "flights": []
             }
-            
+
             for i, segment in enumerate(segments, 1):
                 flight = segment.flight
                 route = flight.route
-                
+
                 flight_details = {
                     "segment_number": i,
                     "flight_number": flight.flight_number,
@@ -607,7 +621,7 @@ class BookingServices:
                     "boarding_pass_available": segment.boarding_pass_issued
                 }
                 itinerary_details["flights"].append(flight_details)
-            
+
             return {
                 "status": "success",
                 "email_details": {
@@ -640,92 +654,108 @@ class BookingServices:
                 ],
                 "message": "Complete itinerary sent successfully to your email"
             }
-            
+
         except BookingNotFoundError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Itinerary email failed: {str(e)}"
-            }
+            return {"status": "error", "message": f"Itinerary email failed: {str(e)}"}        
+    
     
     @staticmethod
     async def check_arrival_time(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 7: Check flight arrival time and details
-        /check_arrival_time
-        """
+        """Check flight arrival time and details"""
         try:
-            flight_number = params.get('flight_number')
-            date_str = params.get('date')
-            booking_ref = params.get('booking_reference')
-            passenger_name = params.get('passenger_name')
-            airline = params.get('airline')
-            
+            flight_number = params.get("flight_number")
+            date_str = params.get("date")
+            booking_ref = params.get("booking_reference")
+            passenger_name = params.get("passenger_name")
+            airline_name = params.get("airline")
+
             flight = None
-            
-            # Search by flight number and date
+
+            # ✈️ Search by flight number + date
             if flight_number and date_str:
                 try:
-                    search_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                    query = db.query(Flight).filter(
-                        and_(
+                    search_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    stmt = (
+                        select(Flight)
+                        .options(
+                            joinedload(Flight.route)
+                                .joinedload(Route.origin_airport),
+                            joinedload(Flight.route)
+                                .joinedload(Route.destination_airport),
+                            joinedload(Flight.airline),
+                            joinedload(Flight.aircraft)
+                                .joinedload(Aircraft.aircraft_type)
+                        )
+                        .where(
                             Flight.flight_number == flight_number,
                             func.date(Flight.scheduled_departure) == search_date
                         )
                     )
-                    if airline:
-                        query = query.join(Airline).filter(Airline.name.ilike(f"%{airline}%"))
-                    flight = query.first()
+                    if airline_name:
+                        stmt = stmt.join(Airline).where(Airline.name.ilike(f"%{airline_name}%"))
+
+                    flight = (await db.execute(stmt)).scalars().first()
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid date format. Please use YYYY-MM-DD"
-                    }
-            
-            # Search by booking reference
+                    return {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD"}
+
+            # 📦 Search by booking reference
             elif booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                booking_stmt = select(Booking).options(joinedload(Booking.passenger)).where(
+                    Booking.booking_reference == booking_ref
+                )
+                booking = (await db.execute(booking_stmt)).scalars().first()
                 if not booking:
                     raise BookingNotFoundError(f"Booking {booking_ref} not found")
-                
-                # Verify passenger name if provided
+
                 if passenger_name:
-                    passenger = booking.passenger
-                    full_name = f"{passenger.first_name} {passenger.last_name}".lower()
+                    full_name = f"{booking.passenger.first_name} {booking.passenger.last_name}".lower()
                     if passenger_name.lower() not in full_name:
-                        return {
-                            "status": "error",
-                            "message": "Passenger name does not match booking"
-                        }
-                
-                segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+                        return {"status": "error", "message": "Passenger name does not match booking"}
+
+                segment_stmt = (
+                    select(BookingSegment)
+                    .options(
+                        joinedload(BookingSegment.flight)
+                            .joinedload(Flight.route)
+                            .joinedload(Route.origin_airport),
+                        joinedload(BookingSegment.flight)
+                            .joinedload(Flight.route)
+                            .joinedload(Route.destination_airport),
+                        joinedload(BookingSegment.flight)
+                            .joinedload(Flight.airline),
+                        joinedload(BookingSegment.flight)
+                            .joinedload(Flight.aircraft)
+                            .joinedload(Aircraft.aircraft_type)
+                    )
+                    .where(BookingSegment.booking_id == booking.id)
+                    .order_by(BookingSegment.id.asc())
+                )
+                segment = (await db.execute(segment_stmt)).scalars().first()
                 flight = segment.flight if segment else None
-            
+
             else:
                 return {
                     "status": "error",
                     "message": "Flight number with date or booking reference required"
                 }
-            
+
             if not flight:
-                return {
-                    "status": "error",
-                    "message": "Flight not found"
-                }
-            
-            # Get latest status update
-            latest_update = db.query(FlightStatusUpdate).filter(
-                FlightStatusUpdate.flight_id == flight.id
-            ).order_by(FlightStatusUpdate.update_time.desc()).first()
-            
+                return {"status": "error", "message": "Flight not found"}
+
+            # 🔍 Fetch latest flight status update
+            update_stmt = (
+                select(FlightStatusUpdate)
+                .where(FlightStatusUpdate.flight_id == flight.id)
+                .order_by(FlightStatusUpdate.update_time.desc())
+            )
+            latest_update = (await db.execute(update_stmt)).scalars().first()
+
             route = flight.route
             origin_airport = route.origin_airport
             destination_airport = route.destination_airport
-            
+
             departure_info = {
                 "flight_details": {
                     "flight_number": flight.flight_number,
@@ -753,6 +783,8 @@ class BookingServices:
                 "departure_times": {
                     "scheduled_departure": flight.scheduled_departure.isoformat(),
                     "scheduled_departure_local": flight.scheduled_departure.strftime('%Y-%m-%d %H:%M'),
+                    "estimated_departure": flight.scheduled_departure.isoformat(),
+                    "delay_minutes": 0
                 },
                 "terminal_information": {
                     "departure_airport": origin_airport.name,
@@ -764,134 +796,120 @@ class BookingServices:
                     "check_in_closes": (flight.scheduled_departure - timedelta(hours=2)).isoformat(),
                     "boarding_time": (flight.scheduled_departure - timedelta(minutes=30)).strftime('%H:%M'),
                     "gate_closes": (flight.scheduled_departure - timedelta(minutes=15)).strftime('%H:%M')
+                },
+                "travel_preparation": {
+                    "arrival_recommendations": {
+                        "domestic": "Arrive 2 hours before departure",
+                        "international": "Arrive 3 hours before departure"
+                    },
+                    "required_documents": [
+                        "Valid government-issued photo ID",
+                        "Boarding pass (mobile or printed)",
+                        "Passport for international travel"
+                    ],
+                    "security_guidelines": [
+                        "Liquids in containers 100ml or less",
+                        "Remove laptops and large electronics",
+                        "Wear easily removable shoes",
+                        "Have ID and boarding pass ready"
+                    ],
+                    "baggage_drop": {
+                        "opens": (flight.scheduled_departure - timedelta(hours=3)).strftime('%H:%M'),
+                        "closes": (flight.scheduled_departure - timedelta(minutes=45)).strftime('%H:%M')
+                    }
                 }
             }
-            
+
             if latest_update:
                 departure_info["departure_times"].update({
-                    "estimated_departure": latest_update.new_departure_time.isoformat() if latest_update.new_departure_time else flight.scheduled_departure.isoformat(),
+                    "estimated_departure": latest_update.new_departure_time.isoformat()
+                        if latest_update.new_departure_time else flight.scheduled_departure.isoformat(),
                     "delay_minutes": latest_update.delay_minutes or 0,
                     "delay_reason": latest_update.reason,
                     "last_updated": latest_update.update_time.isoformat()
                 })
-                
                 if latest_update.gate_change:
                     departure_info["terminal_information"]["gate_change"] = {
                         "old_gate": flight.gate,
                         "new_gate": latest_update.gate_change
                     }
-            else:
-                departure_info["departure_times"]["estimated_departure"] = flight.scheduled_departure.isoformat()
-                departure_info["departure_times"]["delay_minutes"] = 0
-            
-            # Add travel preparation info
-            departure_info["travel_preparation"] = {
-                "arrival_recommendations": {
-                    "domestic": "Arrive 2 hours before departure",
-                    "international": "Arrive 3 hours before departure"
-                },
-                "required_documents": [
-                    "Valid government-issued photo ID",
-                    "Boarding pass (mobile or printed)",
-                    "Passport for international travel"
-                ],
-                "security_guidelines": [
-                    "Liquids in containers 100ml or less",
-                    "Remove laptops and large electronics",
-                    "Wear easily removable shoes",
-                    "Have ID and boarding pass ready"
-                ],
-                "baggage_drop": {
-                    "opens": (flight.scheduled_departure - timedelta(hours=3)).strftime('%H:%M'),
-                    "closes": (flight.scheduled_departure - timedelta(minutes=45)).strftime('%H:%M')
-                }
-            }
-            
+
             return {
                 "status": "success",
                 "departure_details": departure_info
             }
-            
+
         except BookingNotFoundError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Departure time check failed: {str(e)}"
-            }
+            return {"status": "error", "message": f"Departure time check failed: {str(e)}"}        
     
     @staticmethod
     async def update_flight_date(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 9: Update flight date for existing booking
-        /update_flight_date
-        """
+        """Update flight date for existing booking"""
         try:
-            booking_ref = params.get('booking_reference')
-            new_return_date = params.get('new_return_date')
-            new_departure_date = params.get('new_departure_date')
-            
+            booking_ref = params.get("booking_reference")
+            new_departure_date = params.get("new_departure_date")
+            new_return_date = params.get("new_return_date")
+
             if not booking_ref:
-                return {
-                    "status": "error",
-                    "message": "Booking reference is required"
-                }
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                return {"status": "error", "message": "Booking reference is required"}
+
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            if booking.status == 'cancelled':
-                return {
-                    "status": "error",
-                    "message": "Cannot update cancelled booking"
-                }
-            
-            # Get booking segments
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
+
+            if booking.status == "cancelled":
+                return {"status": "error", "message": "Cannot update cancelled booking"}
+
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segments = (await db.execute(segment_stmt)).scalars().all()
+
             if not segments:
-                return {
-                    "status": "error",
-                    "message": "No flight segments found"
-                }
-            
+                return {"status": "error", "message": "No flight segments found"}
+
             date_changes = []
-            change_fee = Decimal('0')
-            base_change_fee = Decimal('75')  # Base change fee
-            
-            # Process departure date change
+            change_fee = Decimal("0")
+            base_change_fee = Decimal("75")
+
+            # ✏️ Departure date change
             if new_departure_date:
                 try:
-                    new_dep_date = datetime.strptime(new_departure_date, '%Y-%m-%d').date()
-                    
-                    # Find outbound segment (first segment)
+                    new_dep_date = datetime.strptime(new_departure_date, "%Y-%m-%d").date()
                     outbound_segment = segments[0]
-                    current_flight = outbound_segment.flight
-                    route = current_flight.route
-                    
-                    # Find flights on new date
-                    new_flights = db.query(Flight).filter(
-                        and_(
-                            Flight.route_id == route.id,
-                            func.date(Flight.scheduled_departure) == new_dep_date,
-                            Flight.status == 'scheduled'
-                        )
-                    ).all()
-                    
+                    route = outbound_segment.flight.route
+
+                    flight_stmt = select(Flight).where(
+                        Flight.route_id == route.id,
+                        func.date(Flight.scheduled_departure) == new_dep_date,
+                        Flight.status == "scheduled"
+                    )
+                    new_flights = (await db.execute(flight_stmt)).scalars().all()
+
                     if new_flights:
                         change_fee += base_change_fee
                         date_changes.append({
                             "segment": "outbound",
-                            "old_date": current_flight.scheduled_departure.strftime('%Y-%m-%d'),
+                            "old_date": outbound_segment.flight.scheduled_departure.strftime("%Y-%m-%d"),
                             "new_date": new_departure_date,
                             "flight_options": [
                                 {
                                     "flight_number": f.flight_number,
-                                    "departure_time": f.scheduled_departure.strftime('%H:%M'),
-                                    "arrival_time": f.scheduled_arrival.strftime('%H:%M')
+                                    "departure_time": f.scheduled_departure.strftime("%H:%M"),
+                                    "arrival_time": f.scheduled_arrival.strftime("%H:%M")
                                 } for f in new_flights[:3]
                             ]
                         })
@@ -900,43 +918,34 @@ class BookingServices:
                             "status": "error",
                             "message": f"No flights available on {new_departure_date}"
                         }
-                        
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid departure date format. Please use YYYY-MM-DD"
-                    }
-            
-            # Process return date change
+                    return {"status": "error", "message": "Invalid departure date format. Use YYYY-MM-DD"}
+
+            # 🔁 Return date change
             if new_return_date and len(segments) > 1:
                 try:
-                    new_ret_date = datetime.strptime(new_return_date, '%Y-%m-%d').date()
-                    
-                    # Find return segment (last segment for round trip)
+                    new_ret_date = datetime.strptime(new_return_date, "%Y-%m-%d").date()
                     return_segment = segments[-1]
-                    current_return_flight = return_segment.flight
-                    return_route = current_return_flight.route
-                    
-                    # Find return flights on new date
-                    new_return_flights = db.query(Flight).filter(
-                        and_(
-                            Flight.route_id == return_route.id,
-                            func.date(Flight.scheduled_departure) == new_ret_date,
-                            Flight.status == 'scheduled'
-                        )
-                    ).all()
-                    
+                    return_route = return_segment.flight.route
+
+                    return_stmt = select(Flight).where(
+                        Flight.route_id == return_route.id,
+                        func.date(Flight.scheduled_departure) == new_ret_date,
+                        Flight.status == "scheduled"
+                    )
+                    new_return_flights = (await db.execute(return_stmt)).scalars().all()
+
                     if new_return_flights:
                         change_fee += base_change_fee
                         date_changes.append({
                             "segment": "return",
-                            "old_date": current_return_flight.scheduled_departure.strftime('%Y-%m-%d'),
+                            "old_date": return_segment.flight.scheduled_departure.strftime("%Y-%m-%d"),
                             "new_date": new_return_date,
                             "flight_options": [
                                 {
                                     "flight_number": f.flight_number,
-                                    "departure_time": f.scheduled_departure.strftime('%H:%M'),
-                                    "arrival_time": f.scheduled_arrival.strftime('%H:%M')
+                                    "departure_time": f.scheduled_departure.strftime("%H:%M"),
+                                    "arrival_time": f.scheduled_arrival.strftime("%H:%M")
                                 } for f in new_return_flights[:3]
                             ]
                         })
@@ -945,26 +954,19 @@ class BookingServices:
                             "status": "error",
                             "message": f"No return flights available on {new_return_date}"
                         }
-                        
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid return date format. Please use YYYY-MM-DD"
-                    }
-            
+                    return {"status": "error", "message": "Invalid return date format. Use YYYY-MM-DD"}
+
             if not date_changes:
-                return {
-                    "status": "error",
-                    "message": "No valid date changes specified"
-                }
-            
-            # Check timing restrictions
+                return {"status": "error", "message": "No valid date changes specified"}
+
+            # ⏱️ Same-day fee adjustment
             for segment in segments:
                 time_to_departure = segment.flight.scheduled_departure - datetime.now()
                 if time_to_departure.days < 1:
-                    change_fee *= Decimal('2')  # Double fee for same-day changes
+                    change_fee *= Decimal("2")
                     break
-            
+
             return {
                 "status": "success",
                 "date_change_details": {
@@ -989,17 +991,11 @@ class BookingServices:
                 "confirmation_required": True,
                 "message": "Date change options found. Please confirm your selection to proceed."
             }
-            
+
         except BookingNotFoundError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Date update failed: {str(e)}"
-            }
+            return {"status": "error", "message": f"Date update failed: {str(e)}"}
     
     @staticmethod
     async def send_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1010,60 +1006,138 @@ class BookingServices:
         try:
             passenger_name = params.get('passenger_name')
             flight_number = params.get('flight_number')
-            flight_date = params.get('flight_date')
+            flight_date_str = params.get('flight_date') # Renamed to avoid conflict with datetime.date object
             document = params.get('document', 'boarding_pass')
             email = params.get('email')
             booking_ref = params.get('booking_reference')
             
             # Validate required parameters
-            if not any([passenger_name, flight_number, booking_ref]):
+            if not any([passenger_name, booking_ref]): # Flight number and date are for lookup, not strictly required if booking_ref is present
                 return {
                     "status": "error",
-                    "message": "Either passenger name with flight number or booking reference is required"
+                    "message": "Either passenger name with flight number/date OR booking reference is required"
                 }
             
-            # Find passenger and booking
             passenger = None
             booking = None
-            
+            flight = None
+            segment = None
+
             if booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                # 🔍 Get booking with passenger and segments eagerly loaded
+                booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref).options(
+                    joinedload(Booking.passenger),
+                    joinedload(Booking.segments).joinedload(BookingSegment.flight).joinedload(Flight.airline) # Load flight and airline
+                )
+                booking = (await db.execute(booking_stmt)).scalars().first()
+                
                 if booking:
                     passenger = booking.passenger
-            elif passenger_name and flight_number:
-                # Search by passenger name and flight
+                    if booking.segments:
+                        # If flight_number is provided, try to find a matching segment
+                        if flight_number:
+                            for seg in booking.segments:
+                                if seg.flight and seg.flight.flight_number == flight_number:
+                                    segment = seg
+                                    flight = seg.flight
+                                    break
+                            if not segment:
+                                return {
+                                    "status": "error",
+                                    "message": f"Flight {flight_number} not found in booking {booking_ref}"
+                                }
+                        else:
+                            # If no flight_number specified, take the first segment's flight
+                            segment = booking.segments[0]
+                            flight = segment.flight
+                    
+                    # Verify passenger name if provided with booking_ref
+                    if passenger_name and passenger:
+                        full_name = f"{passenger.first_name} {passenger.last_name}".lower()
+                        if passenger_name.lower() not in full_name:
+                            return {
+                                "status": "error",
+                                "message": "Passenger name does not match booking"
+                            }
+
+            elif passenger_name and flight_number and flight_date_str:
+                try:
+                    search_date = datetime.strptime(flight_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return {
+                        "status": "error",
+                        "message": "Invalid date format. Please use YYYY-MM-DD"
+                    }
+
                 name_parts = passenger_name.split()
-                if len(name_parts) >= 2:
-                    first_name = name_parts[0]
-                    last_name = name_parts[-1]
-                    
-                    passenger = db.query(Passenger).filter(
-                        and_(
-                            Passenger.first_name.ilike(f"%{first_name}%"),
-                            Passenger.last_name.ilike(f"%{last_name}%")
-                        )
-                    ).first()
-                    
-                    if passenger:
-                        booking = db.query(Booking).filter_by(passenger_id=passenger.id).first()
-            
-            if not passenger or not booking:
+                first_name = name_parts[0]
+                last_name = name_parts[-1] if len(name_parts) > 1 else ''
+
+                # 🔍 Search for passenger and associated booking/segment/flight
+                # We need to join through BookingSegment to Flight to match on flight details
+                passenger_stmt = select(Passenger).where(
+                    and_(
+                        Passenger.first_name.ilike(f"%{first_name}%"),
+                        Passenger.last_name.ilike(f"%{last_name}%")
+                    )
+                ).options(
+                    joinedload(Passenger.bookings).joinedload(Booking.segments).joinedload(BookingSegment.flight) # Load bookings -> segments -> flights
+                )
+                passengers_result = await db.execute(passenger_stmt)
+                all_passengers = passengers_result.scalars().all()
+
+                for p in all_passengers:
+                    for b in p.bookings:
+                        for s in b.segments:
+                            if s.flight and s.flight.flight_number == flight_number and \
+                            s.flight.scheduled_departure.date() == search_date:
+                                passenger = p
+                                booking = b
+                                segment = s
+                                flight = s.flight
+                                break
+                        if passenger: break
+                    if passenger: break
+
+            if not passenger or not booking or not segment or not flight:
                 return {
                     "status": "error",
-                    "message": "Passenger or booking not found"
+                    "message": "Passenger, booking, or flight information not found with the provided details."
                 }
             
             recipient_email = email or passenger.email
             if not recipient_email:
                 return {
                     "status": "error",
-                    "message": "Email address is required"
+                    "message": "Email address is required to send the document."
                 }
             
-            # Get flight information
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
+            # Ensure flight's route, origin_airport, destination_airport, and airline are loaded
+            # The above joinedloads for booking.segments should already bring in flight and airline.
+            # Now explicitly load route and airports if not already.
+            flight_details_stmt = select(Flight).where(Flight.id == flight.id).options(
+                joinedload(Flight.route).joinedload(Route.origin_airport),
+                joinedload(Flight.route).joinedload(Route.destination_airport),
+                joinedload(Flight.airline),
+                joinedload(Flight.aircraft).joinedload(Aircraft.aircraft_type)
+            )
+            flight_full = (await db.execute(flight_details_stmt)).scalars().first()
+
+            if not flight_full:
+                return {"status": "error", "message": "Detailed flight information could not be retrieved."}
             
-            # Process different document types
+            flight = flight_full # Update flight object with full details
+
+            # Get latest status update for the specific flight
+            latest_update_stmt = select(FlightStatusUpdate).where(
+                FlightStatusUpdate.flight_id == flight.id
+            ).order_by(FlightStatusUpdate.update_time.desc())
+            latest_update = (await db.execute(latest_update_stmt)).scalars().first()
+            
+            route = flight.route
+            origin_airport = route.origin_airport
+            destination_airport = route.destination_airport
+            
             email_content = {
                 "recipient": recipient_email,
                 "passenger_name": f"{passenger.first_name} {passenger.last_name}",
@@ -1071,9 +1145,29 @@ class BookingServices:
                 "sent_at": datetime.now().isoformat()
             }
             
+            # Populate flight_details for all document types
+            flight_details = {
+                "flight_number": flight.flight_number,
+                "airline": flight.airline.name,
+                "date": flight.scheduled_departure.strftime('%Y-%m-%d'),
+                "departure": {
+                    "time": flight.scheduled_departure.strftime('%H:%M'),
+                    "airport": f"{origin_airport.name} ({origin_airport.iata_code})",
+                    "terminal": flight.terminal,
+                    "gate": flight.gate
+                },
+                "arrival": {
+                    "time": flight.scheduled_arrival.strftime('%H:%M'),
+                    "airport": f"{destination_airport.name} ({destination_airport.iata_code})"
+                },
+                "seat": segment.seat_number,
+                "class": segment.class_of_service
+            }
+            email_content["flight_details"] = flight_details
+
             if document == 'boarding_pass':
                 email_content.update({
-                    "subject": f"HopJetAir Boarding Pass - {flight_number}",
+                    "subject": f"HopJetAir Boarding Pass - {flight.flight_number}",
                     "document_type": "Boarding Pass",
                     "content_includes": [
                         "Mobile boarding pass",
@@ -1111,32 +1205,22 @@ class BookingServices:
                         "Terms and conditions"
                     ]
                 })
-            
-            # Add flight details to email
-            if flight_number and segments:
-                matching_segment = next(
-                    (s for s in segments if s.flight.flight_number == flight_number), 
-                    segments[0]
-                )
-                flight = matching_segment.flight
-                route = flight.route
-                
-                email_content["flight_details"] = {
-                    "flight_number": flight.flight_number,
-                    "airline": flight.airline.name,
-                    "date": flight.scheduled_departure.strftime('%Y-%m-%d'),
-                    "departure": {
-                        "time": flight.scheduled_departure.strftime('%H:%M'),
-                        "airport": f"{route.origin_airport.name} ({route.origin_airport.iata_code})",
-                        "terminal": flight.terminal,
-                        "gate": flight.gate
-                    },
-                    "arrival": {
-                        "time": flight.scheduled_arrival.strftime('%H:%M'),
-                        "airport": f"{route.destination_airport.name} ({route.destination_airport.iata_code})"
-                    },
-                    "seat": matching_segment.seat_number,
-                    "class": matching_segment.class_of_service
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Unsupported document type: {document}. Supported types are 'boarding_pass', 'itinerary', 'confirmation'."
+                }
+
+            # Add latest flight status updates if available
+            if latest_update:
+                email_content["flight_details"]["status_update"] = {
+                    "current_status": latest_update.status,
+                    "estimated_departure": latest_update.new_departure_time.isoformat() if latest_update.new_departure_time else None,
+                    "estimated_arrival": latest_update.new_arrival_time.isoformat() if latest_update.new_arrival_time else None,
+                    "delay_minutes": latest_update.delay_minutes,
+                    "reason": latest_update.reason,
+                    "gate_change": latest_update.gate_change,
+                    "last_updated": latest_update.update_time.isoformat()
                 }
             
             return {
@@ -1160,154 +1244,16 @@ class BookingServices:
                 "message": f"{document.replace('_', ' ').title()} sent successfully to {recipient_email}"
             }
             
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Email sending failed: {str(e)}"
-            }
-            
-            # Search by flight number and date
-            if flight_number and date_str:
-                try:
-                    search_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                    query = db.query(Flight).filter(
-                        and_(
-                            Flight.flight_number == flight_number,
-                            func.date(Flight.scheduled_departure) == search_date
-                        )
-                    )
-                    if airline:
-                        query = query.join(Airline).filter(Airline.name.ilike(f"%{airline}%"))
-                    flight = query.first()
-                except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid date format. Please use YYYY-MM-DD"
-                    }
-            
-            # Search by booking reference
-            elif booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
-                if not booking:
-                    raise BookingNotFoundError(f"Booking {booking_ref} not found")
-                
-                # Verify passenger name if provided
-                if passenger_name:
-                    passenger = booking.passenger
-                    full_name = f"{passenger.first_name} {passenger.last_name}".lower()
-                    if passenger_name.lower() not in full_name:
-                        return {
-                            "status": "error",
-                            "message": "Passenger name does not match booking"
-                        }
-                
-                segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
-                flight = segment.flight if segment else None
-            
-            else:
-                return {
-                    "status": "error",
-                    "message": "Flight number with date or booking reference required"
-                }
-            
-            if not flight:
-                return {
-                    "status": "error",
-                    "message": "Flight not found"
-                }
-            
-            # Get latest status update
-            latest_update = db.query(FlightStatusUpdate).filter(
-                FlightStatusUpdate.flight_id == flight.id
-            ).order_by(FlightStatusUpdate.update_time.desc()).first()
-            
-            route = flight.route
-            destination_airport = route.destination_airport
-            origin_airport = route.origin_airport
-            
-            arrival_info = {
-                "flight_details": {
-                    "flight_number": flight.flight_number,
-                    "airline": flight.airline.name,
-                    "aircraft": f"{flight.aircraft.aircraft_type.manufacturer} {flight.aircraft.aircraft_type.model}",
-                    "status": flight.status
-                },
-                "route_information": {
-                    "origin": {
-                        "code": origin_airport.iata_code,
-                        "name": origin_airport.name,
-                        "city": origin_airport.city,
-                        "country": origin_airport.country
-                    },
-                    "destination": {
-                        "code": destination_airport.iata_code,
-                        "name": destination_airport.name,
-                        "city": destination_airport.city,
-                        "country": destination_airport.country,
-                        "timezone": destination_airport.timezone
-                    },
-                    "distance": f"{route.distance_km} km",
-                    "flight_duration": f"{route.flight_duration_minutes // 60}h {route.flight_duration_minutes % 60}m"
-                },
-                "arrival_times": {
-                    "scheduled_arrival": flight.scheduled_arrival.isoformat(),
-                    "scheduled_arrival_local": flight.scheduled_arrival.strftime('%Y-%m-%d %H:%M'),
-                },
-                "terminal_information": {
-                    "terminal": flight.terminal,
-                    "gate": flight.gate if flight.status in ['boarding', 'departed'] else "TBA"
-                }
-            }
-            
-            if latest_update:
-                arrival_info["arrival_times"].update({
-                    "estimated_arrival": latest_update.new_arrival_time.isoformat() if latest_update.new_arrival_time else flight.scheduled_arrival.isoformat(),
-                    "delay_minutes": latest_update.delay_minutes or 0,
-                    "delay_reason": latest_update.reason,
-                    "last_updated": latest_update.update_time.isoformat()
-                })
-                
-                if latest_update.gate_change:
-                    arrival_info["terminal_information"]["gate_change"] = latest_update.gate_change
-            else:
-                arrival_info["arrival_times"]["estimated_arrival"] = flight.scheduled_arrival.isoformat()
-                arrival_info["arrival_times"]["delay_minutes"] = 0
-            
-            # Add ground services info for arrivals
-            arrival_info["ground_services"] = {
-                "baggage_claim": f"Carousel {random.randint(1, 8)}",
-                "customs": "Available for international arrivals" if destination_airport.country != origin_airport.country else "Not required",
-                "immigration": "Required for international arrivals" if destination_airport.country != origin_airport.country else "Not required",
-                "ground_transport": [
-                    "Taxi service",
-                    "Rental cars - Level 1",
-                    "Public transport",
-                    "Ride-sharing pickup - Level 2",
-                    "Hotel shuttles"
-                ],
-                "airport_services": [
-                    "Information desk - Arrivals hall",
-                    "Currency exchange",
-                    "ATM machines",
-                    "Restaurants and shops",
-                    "WiFi throughout terminal"
-                ]
-            }
-            
-            return {
-                "status": "success",
-                "arrival_details": arrival_info
-            }
-            
         except BookingNotFoundError as e:
             return {
                 "status": "error",
                 "message": str(e)
             }
         except Exception as e:
+            # In a real application, you'd want to log the full exception traceback for debugging.
             return {
                 "status": "error",
-                "message": f"Arrival time check failed: {str(e)}"
+                "message": f"Email sending failed: {str(e)}"
             }
     
     @staticmethod
@@ -1321,67 +1267,107 @@ class BookingServices:
             date_str = params.get('date')
             booking_ref = params.get('booking_reference')
             passenger_name = params.get('passenger_name')
-            last_name = params.get('last_name')
-            airline = params.get('airline')
-            departure_airport = params.get('departure_airport')
+            last_name = params.get('last_name') # This is redundant if passenger_name can be full name
+            airline_name_param = params.get('airline') # Renamed to avoid conflict with Airline model
+            departure_airport_code = params.get('departure_airport') # Renamed to clarify it's a code
             
             flight = None
             
-            # Search by flight number and date
-            if flight_number and date_str:
+            # Determine search strategy
+            if booking_ref:
+                # 🔍 Search by booking reference, eagerly loading related data
+                booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref).options(
+                    joinedload(Booking.passenger),
+                    joinedload(Booking.booking_segments).joinedload(BookingSegment.flight)
+                                                .joinedload(Flight.airline),
+                    joinedload(Booking.booking_segments).joinedload(BookingSegment.flight)
+                                                .joinedload(Flight.aircraft).joinedload(Aircraft.aircraft_type),
+                    joinedload(Booking.booking_segments).joinedload(BookingSegment.flight)
+                                                .joinedload(Flight.route).joinedload(Route.origin_airport),
+                    joinedload(Booking.booking_segments).joinedload(BookingSegment.flight)
+                                                .joinedload(Flight.route).joinedload(Route.destination_airport)
+                )
+                booking = (await db.execute(booking_stmt)).scalars().first()
+                
+                if not booking:
+                    raise BookingNotFoundError(f"Booking {booking_ref} not found")
+                
+                # Verify passenger name if provided with booking_ref
+                if passenger_name or last_name:
+                    passenger = booking.passenger
+                    if not passenger:
+                        return {"status": "error", "message": "Passenger information not found for this booking."}
+
+                    # Construct full name for comparison (case-insensitive and flexible)
+                    full_name_from_db = f"{passenger.first_name} {passenger.last_name}".lower()
+                    provided_name_check = False
+                    if passenger_name:
+                        if passenger_name.lower() in full_name_from_db:
+                            provided_name_check = True
+                    if last_name and not provided_name_check: # Check last_name if passenger_name didn't match
+                        if last_name.lower() in full_name_from_db:
+                            provided_name_check = True
+
+                    if not provided_name_check:
+                        return {
+                            "status": "error",
+                            "message": "Passenger name provided does not match booking details."
+                        }
+                
+                # Assuming a booking typically has one relevant flight segment for departure status
+                # If multiple segments, could add logic to select based on flight_number if present
+                if booking.booking_segments:
+                    flight = booking.booking_segments[0].flight
+                
+            elif flight_number and date_str:
                 try:
                     search_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                    query = db.query(Flight).filter(
-                        and_(
-                            Flight.flight_number == flight_number,
-                            func.date(Flight.scheduled_departure) == search_date
-                        )
-                    )
-                    if airline:
-                        query = query.join(Airline).filter(Airline.name.ilike(f"%{airline}%"))
-                    flight = query.first()
                 except ValueError:
                     return {
                         "status": "error",
                         "message": "Invalid date format. Please use YYYY-MM-DD"
                     }
-            
-            # Search by booking reference
-            elif booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
-                if not booking:
-                    raise BookingNotFoundError(f"Booking {booking_ref} not found")
                 
-                # Verify passenger name if provided
-                if passenger_name or last_name:
-                    passenger = booking.passenger
-                    full_name = f"{passenger.first_name} {passenger.last_name}".lower()
-                    name_to_check = (passenger_name or last_name).lower()
-                    if name_to_check not in full_name:
-                        return {
-                            "status": "error",
-                            "message": "Passenger name does not match booking"
-                        }
+                # 🔍 Search by flight number and date, eagerly loading related data
+                flight_stmt = select(Flight).where(
+                    and_(
+                        Flight.flight_number == flight_number,
+                        func.date(Flight.scheduled_departure) == search_date
+                    )
+                ).options(
+                    joinedload(Flight.airline),
+                    joinedload(Flight.aircraft).joinedload(Aircraft.aircraft_type),
+                    joinedload(Flight.route).joinedload(Route.origin_airport),
+                    joinedload(Flight.route).joinedload(Route.destination_airport)
+                )
+
+                if airline_name_param:
+                    # Add a join and filter for airline name if provided
+                    flight_stmt = flight_stmt.join(Airline).where(Airline.name.ilike(f"%{airline_name_param}%"))
                 
-                segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
-                flight = segment.flight if segment else None
-            
+                if departure_airport_code:
+                    # Add a join and filter for origin airport if provided
+                    flight_stmt = flight_stmt.join(Route).join(Airport, Route.origin_airport_id == Airport.id).where(Airport.iata_code.ilike(departure_airport_code))
+
+                flight = (await db.execute(flight_stmt)).scalars().first()
+                
             else:
                 return {
                     "status": "error",
-                    "message": "Flight number with date or booking reference required"
+                    "message": "Flight number with date OR booking reference is required to check departure time."
                 }
             
             if not flight:
                 return {
                     "status": "error",
-                    "message": "Flight not found"
+                    "message": "Flight not found with the provided details. Please check the flight number, date, and booking reference."
                 }
             
-            # Get latest status update
-            latest_update = db.query(FlightStatusUpdate).filter(
+            # Get latest status update for the flight
+            latest_update_stmt = select(FlightStatusUpdate).where(
                 FlightStatusUpdate.flight_id == flight.id
-            ).order_by(FlightStatusUpdate.update_time.desc()).first()
+            ).order_by(FlightStatusUpdate.update_time.desc())
+            latest_update = (await db.execute(latest_update_stmt)).scalars().first()
             
             route = flight.route
             origin_airport = route.origin_airport
@@ -1395,7 +1381,7 @@ class BookingServices:
                     "flight_number": flight.flight_number,
                     "airline": flight.airline.name,
                     "aircraft": f"{flight.aircraft.aircraft_type.manufacturer} {flight.aircraft.aircraft_type.model}",
-                    "status": flight.status,
+                    "current_status": flight.status, # Using flight.status directly
                     "flight_type": "international" if is_international else "domestic"
                 },
                 "route_information": {
@@ -1426,7 +1412,7 @@ class BookingServices:
                     "departure_airport": origin_airport.name,
                     "terminal": flight.terminal or "TBA",
                     "gate": flight.gate or "TBA",
-                    "check_in_counters": "Level 2, Terminal Main"
+                    "check_in_counters": "Level 2, Terminal Main" # Placeholder, consider making dynamic
                 },
                 "check_in_information": {
                     "online_checkin": {
@@ -1453,9 +1439,10 @@ class BookingServices:
                     "delay_minutes": latest_update.delay_minutes or 0,
                     "delay_reason": latest_update.reason,
                     "last_updated": latest_update.update_time.isoformat(),
-                    "status_message": f"Flight delayed by {latest_update.delay_minutes} minutes" if latest_update.delay_minutes else "On time"
+                    # FIXED: Removed 'latest_update.status_message' as it's not an attribute
+                    "status_message": "Flight delayed" if latest_update.delay_minutes else "On time"
                 })
-                
+
                 if latest_update.gate_change:
                     departure_info["terminal_information"]["gate_change"] = {
                         "old_gate": flight.gate,
@@ -1507,7 +1494,7 @@ class BookingServices:
                     "baggage_drop": {
                         "opens": (flight.scheduled_departure - timedelta(hours=3)).strftime('%H:%M'),
                         "closes": (flight.scheduled_departure - timedelta(minutes=45)).strftime('%H:%M'),
-                        "location": "Level 2, Terminal Main"
+                        "location": "Level 2, Terminal Main" # Placeholder
                     },
                     "oversized_baggage": "Special counter at Level 1",
                     "baggage_weight_limit": "23kg for economy, 32kg for business/first"
@@ -1577,7 +1564,10 @@ class BookingServices:
                 "message": str(e)
             }
         except Exception as e:
+            # In a real application, you'd want to log the full exception traceback for debugging.
             return {
                 "status": "error",
                 "message": f"Departure time check failed: {str(e)}"
             }
+
+    
