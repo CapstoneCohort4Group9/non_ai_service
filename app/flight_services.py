@@ -3,20 +3,21 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Any
 import random
 import string
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 from sqlalchemy import select, and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from .database_models import *
 from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 #done
 class FlightSearchService:
     @staticmethod
-    async def search_flight(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_flight(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search for available flights"""
         try:
             origin = params.get('origin', 'Chicago')
             destination = params.get('destination', 'Madrid')
             departure_date = params.get('departure_date', params.get('date'))
-            
+
             # Get airports
             origin_stmt = select(Airport).where(
                 or_(Airport.iata_code == origin, Airport.city.ilike(f"%{origin}%"))
@@ -27,14 +28,14 @@ class FlightSearchService:
 
             origin_airport = (await db.execute(origin_stmt)).scalars().first()
             dest_airport = (await db.execute(dest_stmt)).scalars().first()
-            
+
             if not origin_airport or not dest_airport:
                 return {
                     "status": "error",
                     "message": "Origin or destination airport not found",
                     "flights": []
                 }
-            
+
             # Parse date
             if isinstance(departure_date, str):
                 try:
@@ -43,25 +44,29 @@ class FlightSearchService:
                     search_date = datetime.now().date()
             else:
                 search_date = departure_date
-            
+
             # Find route
             route_stmt = select(Route).where(
                 Route.origin_airport_id == origin_airport.id,
                 Route.destination_airport_id == dest_airport.id
             )
             route = (await db.execute(route_stmt)).scalars().first()
-            
+
             if not route:
                 return {
                     "status": "success",
                     "message": "No direct flights available",
                     "flights": []
                 }
-            
-            # Search flights
+
+            # Search flights with joinedload to avoid lazy-loading errors
             flight_stmt = (
                 select(Flight)
-                .join(Airline)
+                .options(
+                    joinedload(Flight.airline),
+                    joinedload(Flight.aircraft).joinedload(Aircraft.aircraft_type),
+                    joinedload(Flight.route)
+                )
                 .where(
                     Flight.route_id == route.id,
                     func.date(Flight.scheduled_departure) == search_date,
@@ -70,7 +75,6 @@ class FlightSearchService:
             )
             flights = (await db.execute(flight_stmt)).scalars().all()
 
-            
             flight_results = []
             for flight in flights:
                 # Calculate available seats
@@ -79,9 +83,8 @@ class FlightSearchService:
                 )
                 booked_seats = (await db.execute(booked_stmt)).scalar()
 
-                
                 available_seats = flight.aircraft.aircraft_type.total_seats - booked_seats
-                
+
                 flight_info = {
                     "flight_id": flight.id,
                     "flight_number": flight.flight_number,
@@ -98,7 +101,7 @@ class FlightSearchService:
                     "terminal": flight.terminal
                 }
                 flight_results.append(flight_info)
-            
+
             return {
                 "status": "success",
                 "origin": {
@@ -115,16 +118,15 @@ class FlightSearchService:
                 "flights": flight_results,
                 "total_results": len(flight_results)
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
                 "message": f"Flight search failed: {str(e)}",
                 "flights": []
             }
-    
     @staticmethod
-    async def search_flights(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_flights(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search flights with advanced filters"""
         try:
             # Similar to search_flight but with more filtering options
@@ -170,36 +172,49 @@ class FlightSearchService:
 
 class FlightStatusService:
     @staticmethod
-    async def check_flight_status(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_flight_status(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check flight status"""
         try:
             flight_number = params.get('flight_number')
             date_str = params.get('date')
-            
-            if date_str:
-                search_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            else:
-                search_date = datetime.now().date()
-            
-            flight = db.query(Flight).join(Airline).filter(
-                and_(
-                    Flight.flight_number == flight_number,
-                    func.date(Flight.scheduled_departure) == search_date
+
+            search_date = (
+                datetime.strptime(date_str, '%Y-%m-%d').date()
+                if date_str else datetime.now().date()
+            )
+
+            # Query flight
+            stmt = (
+                select(Flight)
+                .options(
+                    joinedload(Flight.route).joinedload(Route.origin_airport),
+                    joinedload(Flight.route).joinedload(Route.destination_airport),
+                    joinedload(Flight.airline)
                 )
-            ).first()
-            
+                .where(
+                    and_(
+                        Flight.flight_number == flight_number,
+                        func.date(Flight.scheduled_departure) == search_date
+                    )
+                )
+            )
+            flight = (await db.execute(stmt)).scalars().first()
+
             if not flight:
                 raise FlightNotFoundError(f"Flight {flight_number} not found for {search_date}")
-            
-            # Get latest status update
-            latest_update = db.query(FlightStatusUpdate).filter(
-                FlightStatusUpdate.flight_id == flight.id
-            ).order_by(FlightStatusUpdate.update_time.desc()).first()
-            
+
+            # Query latest status update
+            update_stmt = (
+                select(FlightStatusUpdate)
+                .where(FlightStatusUpdate.flight_id == flight.id)
+                .order_by(FlightStatusUpdate.update_time.desc())
+            )
+            latest_update = (await db.execute(update_stmt)).scalars().first()
+
             route = flight.route
             origin_airport = route.origin_airport
             dest_airport = route.destination_airport
-            
+
             status_info = {
                 "flight_number": flight.flight_number,
                 "airline": flight.airline.name,
@@ -219,7 +234,7 @@ class FlightStatusService:
                 "gate": flight.gate,
                 "terminal": flight.terminal
             }
-            
+
             if latest_update:
                 status_info.update({
                     "actual_departure": latest_update.new_departure_time.isoformat() if latest_update.new_departure_time else None,
@@ -227,12 +242,12 @@ class FlightStatusService:
                     "delay_minutes": latest_update.delay_minutes,
                     "update_reason": latest_update.reason
                 })
-            
+
             return {
                 "status": "success",
                 "flight_status": status_info
             }
-            
+
         except FlightNotFoundError as e:
             return {
                 "status": "error",
@@ -245,13 +260,13 @@ class FlightStatusService:
             }
     
     @staticmethod
-    async def get_flight_status(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_flight_status(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Alternative flight status endpoint"""
         return await FlightStatusService.check_flight_status(db, params)
 
 class FlightAvailabilityService:
     @staticmethod
-    async def check_flight_availability(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_flight_availability(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check flight availability"""
         try:
             origin = params.get('origin', params.get('frm'))
@@ -303,7 +318,7 @@ class FlightAvailabilityService:
             }
     
     @staticmethod
-    async def query_flight_availability(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def query_flight_availability(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query flight availability with time preferences"""
         try:
             origin = params.get('origin')
@@ -327,47 +342,54 @@ class FlightAvailabilityService:
             }
     
     @staticmethod
-    async def check_flight_availability_and_fare(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_flight_availability_and_fare(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check both availability and fare information"""
         try:
             booking_ref = params.get('booking_reference')
             new_date = params.get('new_date')
-            
+
             # Get current booking
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+
+            # Get first segment
+            segment_stmt = select(BookingSegment).where(BookingSegment.booking_id == booking.id)
+            segment = (await db.execute(segment_stmt)).scalars().first()
+
             if not segment:
                 return {"status": "error", "message": "No flight segments found"}
-            
+
             current_flight = segment.flight
             route = current_flight.route
-            
-            # Search for flights on new date
+
+            # Build search params
             search_params = {
                 'origin': route.origin_airport.iata_code,
                 'destination': route.destination_airport.iata_code,
                 'departure_date': new_date
             }
-            
+
+            # Run availability search
             availability_result = await FlightSearchService.search_flight(db, search_params)
-            
+
             if availability_result["status"] == "success":
-                # Add fare difference information
+                current_price = float(booking.total_amount)
                 for flight in availability_result["flights"]:
-                    current_price = float(booking.total_amount)
                     new_price = flight["price_economy"]
                     price_difference = new_price - current_price
-                    
-                    flight["current_booking_price"] = current_price
-                    flight["price_difference"] = price_difference
-                    flight["change_fee"] = 75.0  # Standard change fee
-                    flight["total_cost_change"] = price_difference + 75.0
-            
+
+                    flight.update({
+                        "current_booking_price": current_price,
+                        "price_difference": price_difference,
+                        "change_fee": 75.0,
+                        "total_cost_change": price_difference + 75.0
+                    })
+
             return availability_result
-            
+
         except Exception as e:
             return {
                 "status": "error",
@@ -376,20 +398,23 @@ class FlightAvailabilityService:
 
 class FlightBookingService:
     @staticmethod
-    async def book_flight(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def book_flight(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Book a flight"""
         try:
-            # Generate booking reference
+            # Generate unique booking reference
             booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            
-            # Ensure unique reference
-            while db.query(Booking).filter_by(booking_reference=booking_ref).first():
+            while True:
+                stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+                existing = (await db.execute(stmt)).scalars().first()
+                if not existing:
+                    break
                 booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            
-            # Create or find passenger
+
+            # Find or create passenger
             passenger_email = params.get('contact', 'passenger@example.com')
-            passenger = db.query(Passenger).filter_by(email=passenger_email).first()
-            
+            passenger_stmt = select(Passenger).where(Passenger.email == passenger_email)
+            passenger = (await db.execute(passenger_stmt)).scalars().first()
+
             if not passenger:
                 passenger = Passenger(
                     first_name="John",
@@ -398,8 +423,8 @@ class FlightBookingService:
                     phone="+1-555-0123"
                 )
                 db.add(passenger)
-                db.flush()
-            
+                await db.flush()
+
             # Create booking
             booking = Booking(
                 booking_reference=booking_ref,
@@ -410,42 +435,40 @@ class FlightBookingService:
                 trip_type=params.get('trip_type', 'round-trip')
             )
             db.add(booking)
-            db.flush()
-            
-            # Find or create a flight for this booking
+            await db.flush()
+
+            # Get airports
             origin = params.get('origin', 'Chicago')
             destination = params.get('destination', 'Madrid')
-            
-            # Get airports and route
-            origin_airport = db.query(Airport).filter(
+
+            origin_stmt = select(Airport).where(
                 or_(Airport.iata_code == origin, Airport.city.ilike(f"%{origin}%"))
-            ).first()
-            dest_airport = db.query(Airport).filter(
+            )
+            dest_stmt = select(Airport).where(
                 or_(Airport.iata_code == destination, Airport.city.ilike(f"%{destination}%"))
-            ).first()
-            
+            )
+
+            origin_airport = (await db.execute(origin_stmt)).scalars().first()
+            dest_airport = (await db.execute(dest_stmt)).scalars().first()
+
             if origin_airport and dest_airport:
-                route = db.query(Route).filter(
-                    and_(
-                        Route.origin_airport_id == origin_airport.id,
-                        Route.destination_airport_id == dest_airport.id
-                    )
-                ).first()
-                
+                route_stmt = select(Route).where(
+                    Route.origin_airport_id == origin_airport.id,
+                    Route.destination_airport_id == dest_airport.id
+                )
+                route = (await db.execute(route_stmt)).scalars().first()
+
                 if route:
-                    # Find available flight
                     departure_date = params.get('departure_date', '2025-08-10')
                     search_date = datetime.strptime(departure_date, '%Y-%m-%d').date()
-                    
-                    flight = db.query(Flight).filter(
-                        and_(
-                            Flight.route_id == route.id,
-                            func.date(Flight.scheduled_departure) == search_date
-                        )
-                    ).first()
-                    
+
+                    flight_stmt = select(Flight).where(
+                        Flight.route_id == route.id,
+                        func.date(Flight.scheduled_departure) == search_date
+                    )
+                    flight = (await db.execute(flight_stmt)).scalars().first()
+
                     if flight:
-                        # Create booking segment
                         segment = BookingSegment(
                             booking_id=booking.id,
                             flight_id=flight.id,
@@ -455,9 +478,9 @@ class FlightBookingService:
                             baggage_allowance_kg=23
                         )
                         db.add(segment)
-            
-            db.commit()
-            
+
+            await db.commit()
+
             return {
                 "status": "success",
                 "booking_reference": booking_ref,
@@ -472,9 +495,9 @@ class FlightBookingService:
                     "passengers": params.get('passengers', 1)
                 }
             }
-            
+
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             return {
                 "status": "error",
                 "message": f"Booking failed: {str(e)}"
@@ -482,87 +505,94 @@ class FlightBookingService:
 
 class FlightChangeService:
     @staticmethod
-    async def change_flight(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def change_flight(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Change flight booking"""
         try:
             booking_ref = params.get('booking_reference', params.get('confirmation_number'))
             new_date = params.get('new_departure_date', params.get('new_date', params.get('new_flight_date')))
-            new_time = params.get('new_departure_time', params.get('new_time'))
             new_destination = params.get('new_destination')
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+
+            # Get current booking
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Get current flight segment
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
-            if not segment:
+
+            # Get current flight segment with joined flight + route + airports
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.destination_airport)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segment = (await db.execute(segment_stmt)).scalars().first()
+
+            if not segment or not segment.flight:
                 return {"status": "error", "message": "No flight segments found"}
-            
+
             current_flight = segment.flight
             route = current_flight.route
-            
-            # Calculate change fee based on fare type and timing
-            change_fee = Decimal('75')  # Base domestic change fee
-            if route.distance_km > 2000:  # International
-                change_fee = Decimal('200')
-            
-            # Check if change is within 24 hours (higher fee)
-            departure_time = current_flight.scheduled_departure
-            time_to_departure = departure_time - datetime.now()
-            if time_to_departure.days < 1:
+
+            # Calculate change fee
+            change_fee = Decimal('75') if route.distance_km <= 2000 else Decimal('200')
+            if (current_flight.scheduled_departure - datetime.now()).days < 1:
                 change_fee *= Decimal('2')
-            
+
             changes_made = []
-            new_flight_info = None
-            
+            new_flights = []
+
             # Handle date change
             if new_date:
                 try:
                     search_date = datetime.strptime(new_date, '%Y-%m-%d').date()
-                    new_flights = db.query(Flight).filter(
-                        and_(
+                    flights_stmt = (
+                        select(Flight)
+                        .where(
                             Flight.route_id == current_flight.route_id,
                             func.date(Flight.scheduled_departure) == search_date,
                             Flight.status == 'scheduled'
                         )
-                    ).all()
-                    
+                    )
+                    new_flights = (await db.execute(flights_stmt)).scalars().all()
                     if new_flights:
-                        new_flight_info = new_flights[0]  # Select first available
                         changes_made.append(f"Date changed to {new_date}")
-                except:
+                except Exception:
                     return {"status": "error", "message": "Invalid date format"}
-            
+
             # Handle destination change
             if new_destination:
-                dest_airport = db.query(Airport).filter(
+                dest_stmt = select(Airport).where(
                     or_(
                         Airport.iata_code == new_destination,
                         Airport.city.ilike(f"%{new_destination}%")
                     )
-                ).first()
-                
+                )
+                dest_airport = (await db.execute(dest_stmt)).scalars().first()
+
                 if dest_airport:
-                    new_route = db.query(Route).filter(
-                        and_(
-                            Route.origin_airport_id == route.origin_airport_id,
-                            Route.destination_airport_id == dest_airport.id
-                        )
-                    ).first()
-                    
+                    new_route_stmt = select(Route).where(
+                        Route.origin_airport_id == route.origin_airport_id,
+                        Route.destination_airport_id == dest_airport.id
+                    )
+                    new_route = (await db.execute(new_route_stmt)).scalars().first()
                     if new_route:
                         changes_made.append(f"Destination changed to {dest_airport.city}")
-                        # Additional fee for destination change
                         change_fee += Decimal('100')
-            
+
             return {
                 "status": "success",
                 "booking_reference": booking_ref,
                 "current_flight": {
                     "flight_number": current_flight.flight_number,
                     "departure": current_flight.scheduled_departure.isoformat(),
-                    "route": f"{route.origin_airport.iata_code} -> {route.destination_airport.iata_code}"
+                    "route": f"{route.origin_airport.iata_code} → {route.destination_airport.iata_code}"
                 },
                 "requested_changes": changes_made,
                 "change_fee": float(change_fee),
@@ -572,8 +602,8 @@ class FlightChangeService:
                         "departure": f.scheduled_departure.isoformat(),
                         "available_seats": 25,
                         "price_difference": random.randint(-100, 200)
-                    } for f in (new_flights[:3] if 'new_flights' in locals() else [])
-                ] if 'new_flights' in locals() else [],
+                    } for f in new_flights[:3]
+                ] if new_flights else [],
                 "policy": {
                     "changes_allowed": True,
                     "same_day_change_fee": float(change_fee * 2),
@@ -581,32 +611,37 @@ class FlightChangeService:
                     "restrictions": "Changes must be made at least 2 hours before departure"
                 }
             }
-            
+
         except BookingNotFoundError as e:
             return {"status": "error", "message": str(e)}
         except Exception as e:
             return {"status": "error", "message": f"Flight change failed: {str(e)}"}
     
     @staticmethod
-    async def confirm_flight_change(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def confirm_flight_change(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Confirm flight change"""
         try:
             booking_ref = params.get('booking_reference')
             new_departure_date = params.get('new_departure_date')
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+
+            # Get current booking
+            booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Process the change confirmation
-            segment = db.query(BookingSegment).filter_by(booking_id=booking.id).first()
+
+            # Get flight segment
+            segment_stmt = select(BookingSegment).where(BookingSegment.booking_id == booking.id)
+            segment = (await db.execute(segment_stmt)).scalars().first()
+
             if segment:
-                # Update booking with change fee
+                # Update booking total with change fee
                 change_fee = Decimal('75')
                 booking.total_amount += change_fee
-                
-                db.commit()
-                
+
+                await db.commit()
+
                 return {
                     "status": "success",
                     "booking_reference": booking_ref,
@@ -616,15 +651,18 @@ class FlightChangeService:
                     "new_total_amount": float(booking.total_amount),
                     "confirmation_number": f"CHG{random.randint(100000, 999999)}"
                 }
-            
+
             return {"status": "error", "message": "Unable to confirm change"}
-            
+
         except Exception as e:
-            db.rollback()
-            return {"status": "error", "message": f"Change confirmation failed: {str(e)}"}
+            await db.rollback()
+            return {
+                "status": "error",
+                "message": f"Change confirmation failed: {str(e)}"
+            }    
     
     @staticmethod
-    async def update_flight_date(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_flight_date(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Update flight date"""
         try:
             booking_ref = params.get('booking_reference')
