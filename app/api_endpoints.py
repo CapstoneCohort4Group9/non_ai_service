@@ -204,8 +204,8 @@ class SearchFlightsRequest(BaseModel):
     sort_by: str = "price"
 
 class GetBookingDetailsRequest(BaseModel):
-    booking_reference: str = "QWE123"
-    passenger_name: str = "Rahul Sharma"
+    booking_reference: str = "NX2Z5S"
+    passenger_name: str = "John Doe"
 
 class CheckFlightAvailabilityRequest(BaseModel):
     origin: str = "Chicago"

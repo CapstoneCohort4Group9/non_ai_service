@@ -3,8 +3,9 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Any
 import random
 import string
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy.orm import joinedload
+from sqlalchemy import select, and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from .database_models import *
 from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 
@@ -15,44 +16,58 @@ class BookingServices:
     """
     
     @staticmethod
-    async def get_booking_details(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 1: Get detailed booking information
-        /get_booking_details
-        """
+    async def get_booking_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get detailed booking information"""
         try:
             booking_ref = params.get('booking_reference')
             passenger_name = params.get('passenger_name')
-            
+
             if not booking_ref:
-                return {
-                    "status": "error",
-                    "message": "Booking reference is required"
-                }
-            
-            booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
-            
+                return {"status": "error", "message": "Booking reference is required"}
+
+            # Load booking with passenger and segments
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.booking_reference == booking_ref)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {booking_ref} not found")
-            
-            # Verify passenger if name provided
+
+            # Verify passenger name if provided
             if passenger_name:
                 passenger = booking.passenger
                 full_name = f"{passenger.first_name} {passenger.last_name}".lower()
                 if passenger_name.lower() not in full_name:
-                    return {
-                        "status": "error",
-                        "message": "Passenger name does not match booking"
-                    }
-            
-            # Get booking segments
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
-            
+                    return {"status": "error", "message": "Passenger name does not match booking"}
+
+            # Load booking segments with full relationship chain
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.airline),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.destination_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.aircraft)
+                    .joinedload(Aircraft.aircraft_type)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segments = (await db.execute(segment_stmt)).scalars().all()
+
             segment_details = []
             for segment in segments:
                 flight = segment.flight
                 route = flight.route
-                
+
                 segment_info = {
                     "segment_id": segment.id,
                     "flight_number": flight.flight_number,
@@ -86,9 +101,9 @@ class BookingServices:
                     "aircraft": f"{flight.aircraft.aircraft_type.manufacturer} {flight.aircraft.aircraft_type.model}"
                 }
                 segment_details.append(segment_info)
-            
+
             passenger = booking.passenger
-            
+
             return {
                 "status": "success",
                 "booking_details": {
@@ -113,70 +128,89 @@ class BookingServices:
                     "segment_count": len(segment_details)
                 }
             }
-            
+
         except BookingNotFoundError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to retrieve booking details: {str(e)}"
-            }
+            return {"status": "error", "message": f"Failed to retrieve booking details: {str(e)}"}
     
     @staticmethod
-    async def check_flight_reservation(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 2: Check flight reservation details
-        /check_flight_reservation
-        """
+    async def check_flight_reservation(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Check flight reservation details"""
         try:
             booking_ref = params.get('booking_reference', params.get('confirmation_number'))
             last_name = params.get('last_name')
             email = params.get('email')
-            first_name = params.get('first_name')
             full_name = params.get('full_name')
-            
-            # Build query based on available parameters
+
             booking = None
-            
+
             if booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                booking_stmt = (
+                    select(Booking)
+                    .options(joinedload(Booking.passenger))
+                    .where(Booking.booking_reference == booking_ref)
+                )
+                booking = (await db.execute(booking_stmt)).scalars().first()
+
             elif email:
-                passenger = db.query(Passenger).filter_by(email=email).first()
+                passenger_stmt = select(Passenger).where(Passenger.email == email)
+                passenger = (await db.execute(passenger_stmt)).scalars().first()
                 if passenger:
-                    booking = db.query(Booking).filter_by(passenger_id=passenger.id).first()
+                    booking_stmt = (
+                        select(Booking)
+                        .options(joinedload(Booking.passenger))
+                        .where(Booking.passenger_id == passenger.id)
+                    )
+                    booking = (await db.execute(booking_stmt)).scalars().first()
+
             elif full_name:
-                # Split full name
-                name_parts = full_name.split()
-                if len(name_parts) >= 2:
-                    first, last = name_parts[0], name_parts[-1]
-                    passenger = db.query(Passenger).filter(
+                parts = full_name.split()
+                if len(parts) >= 2:
+                    first, last = parts[0], parts[-1]
+                    passenger_stmt = select(Passenger).where(
                         and_(
                             Passenger.first_name.ilike(f"%{first}%"),
                             Passenger.last_name.ilike(f"%{last}%")
                         )
-                    ).first()
+                    )
+                    passenger = (await db.execute(passenger_stmt)).scalars().first()
                     if passenger:
-                        booking = db.query(Booking).filter_by(passenger_id=passenger.id).first()
-            
+                        booking_stmt = (
+                            select(Booking)
+                            .options(joinedload(Booking.passenger))
+                            .where(Booking.passenger_id == passenger.id)
+                        )
+                        booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 return {
                     "status": "error",
                     "message": "Reservation not found. Please check your booking reference or contact customer service."
                 }
-            
-            # Verify last name if provided
+
             if last_name and last_name.lower() not in booking.passenger.last_name.lower():
                 return {
                     "status": "error",
                     "message": "Last name does not match reservation"
                 }
-            
-            # Get flight details
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
-            
+
+            # Load segments with full relationship tree
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.origin_airport),
+                    joinedload(BookingSegment.flight)
+                    .joinedload(Flight.route)
+                    .joinedload(Route.destination_airport),
+                    joinedload(BookingSegment.flight).joinedload(Flight.airline)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segments = (await db.execute(segment_stmt)).scalars().all()
+
             reservation_details = {
                 "reservation_found": True,
                 "booking_reference": booking.booking_reference,
@@ -197,11 +231,11 @@ class BookingServices:
                 },
                 "flights": []
             }
-            
+
             for segment in segments:
                 flight = segment.flight
                 route = flight.route
-                
+
                 flight_info = {
                     "flight_number": flight.flight_number,
                     "airline": flight.airline.name,
@@ -231,12 +265,12 @@ class BookingServices:
                     }
                 }
                 reservation_details["flights"].append(flight_info)
-            
+
             return {
                 "status": "success",
                 "reservation": reservation_details
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
@@ -244,7 +278,7 @@ class BookingServices:
             }
     
     @staticmethod
-    async def query_booking_details(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def query_booking_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 3: Query booking details with flexible search
         /query_booking_details
@@ -284,45 +318,50 @@ class BookingServices:
             }
     
     @staticmethod
-    async def retrieve_booking_by_email(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 4: Retrieve booking using email address
-        /retrieve_booking_by_email
-        """
+    async def retrieve_booking_by_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Retrieve booking using email address"""
         try:
-            email = params.get('email')
-            
+            email = params.get("email")
+
             if not email:
-                return {
-                    "status": "error",
-                    "message": "Email address is required"
-                }
-            
-            # Find passenger by email
-            passenger = db.query(Passenger).filter_by(email=email).first()
-            
+                return {"status": "error", "message": "Email address is required"}
+
+            # Find passenger
+            passenger_stmt = select(Passenger).where(Passenger.email == email)
+            passenger = (await db.execute(passenger_stmt)).scalars().first()
+
             if not passenger:
-                return {
-                    "status": "error",
-                    "message": "No bookings found for this email address"
-                }
-            
-            # Get all bookings for this passenger
-            bookings = db.query(Booking).filter_by(passenger_id=passenger.id).order_by(
-                Booking.booking_date.desc()
-            ).all()
-            
+                return {"status": "error", "message": "No bookings found for this email address"}
+
+            # Get bookings with segments and flights preloaded
+            booking_stmt = (
+                select(Booking)
+                .options(joinedload(Booking.passenger))
+                .where(Booking.passenger_id == passenger.id)
+                .order_by(Booking.booking_date.desc())
+            )
+            bookings = (await db.execute(booking_stmt)).scalars().all()
+
             if not bookings:
-                return {
-                    "status": "error",
-                    "message": "No bookings found for this passenger"
-                }
-            
+                return {"status": "error", "message": "No bookings found for this passenger"}
+
             booking_list = []
             for booking in bookings:
-                # Get basic flight info for each booking
-                segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
-                
+                segment_stmt = (
+                    select(BookingSegment)
+                    .options(
+                        joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.origin_airport),
+                        joinedload(BookingSegment.flight)
+                        .joinedload(Flight.route)
+                        .joinedload(Route.destination_airport)
+                    )
+                    .where(BookingSegment.booking_id == booking.id)
+                    .order_by(BookingSegment.id.asc())
+                )
+                segments = (await db.execute(segment_stmt)).scalars().all()
+
                 booking_info = {
                     "booking_reference": booking.booking_reference,
                     "booking_date": booking.booking_date.isoformat(),
@@ -333,12 +372,12 @@ class BookingServices:
                     "flight_count": len(segments),
                     "booking_source": booking.booking_source
                 }
-                
+
                 if segments:
                     first_segment = segments[0]
                     flight = first_segment.flight
                     route = flight.route
-                    
+
                     booking_info["primary_route"] = {
                         "origin": route.origin_airport.iata_code,
                         "destination": route.destination_airport.iata_code,
@@ -347,15 +386,13 @@ class BookingServices:
                         "departure_date": flight.scheduled_departure.strftime('%Y-%m-%d'),
                         "departure_time": flight.scheduled_departure.strftime('%H:%M')
                     }
-                    
-                    # Add return flight info if round trip
+
                     if len(segments) > 1:
-                        return_segment = segments[-1]
-                        return_flight = return_segment.flight
+                        return_flight = segments[-1].flight
                         booking_info["return_date"] = return_flight.scheduled_departure.strftime('%Y-%m-%d')
-                
+
                 booking_list.append(booking_info)
-            
+
             return {
                 "status": "success",
                 "email": email,
@@ -367,94 +404,92 @@ class BookingServices:
                 "bookings_found": len(booking_list),
                 "bookings": booking_list
             }
-            
+
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Email booking retrieval failed: {str(e)}"
-            }
+            return {"status": "error", "message": f"Email booking retrieval failed: {str(e)}"}
     
     @staticmethod
-    async def cancel_booking(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        ENDPOINT 5: Cancel a flight booking
-        /cancel_booking
-        """
+    async def cancel_booking(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Cancel a flight booking"""
         try:
-            confirmation_number = params.get('confirmation_number')
-            
+            confirmation_number = params.get("confirmation_number")
+
             if not confirmation_number:
-                return {
-                    "status": "error",
-                    "message": "Confirmation number is required"
-                }
-            
-            booking = db.query(Booking).filter_by(booking_reference=confirmation_number).first()
-            
+                return {"status": "error", "message": "Confirmation number is required"}
+
+            # Fetch booking with segments and flights eager-loaded
+            booking_stmt = (
+                select(Booking)
+                .where(Booking.booking_reference == confirmation_number)
+            )
+            booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not booking:
                 raise BookingNotFoundError(f"Booking {confirmation_number} not found")
-            
-            if booking.status == 'cancelled':
+
+            if booking.status == "cancelled":
                 return {
                     "status": "error",
                     "message": "Booking is already cancelled",
                     "booking_reference": confirmation_number,
                     "current_status": "cancelled"
                 }
-            
-            # Get flight segments to calculate fees
-            segments = db.query(BookingSegment).filter_by(booking_id=booking.id).all()
-            
-            cancellation_fee = Decimal('0')
+
+            segment_stmt = (
+                select(BookingSegment)
+                .options(
+                    joinedload(BookingSegment.flight)
+                )
+                .where(BookingSegment.booking_id == booking.id)
+            )
+            segments = (await db.execute(segment_stmt)).scalars().all()
+
+            cancellation_fee = Decimal("0")
             refund_amount = booking.total_amount
             cancellation_reason = "standard_cancellation"
-            
-            # Apply cancellation fee based on timing
+
             if segments:
-                earliest_departure = min(segment.flight.scheduled_departure for segment in segments)
+                earliest_departure = min(s.flight.scheduled_departure for s in segments)
                 time_to_departure = earliest_departure - datetime.now()
-                
-                if time_to_departure.days < 0:
+
+                if time_to_departure.total_seconds() < 0:
                     return {
                         "status": "error",
                         "message": "Cannot cancel booking for flights that have already departed"
                     }
-                elif time_to_departure.total_seconds() < 7200:  # Less than 2 hours
+                elif time_to_departure.total_seconds() < 7200:
                     return {
                         "status": "error",
                         "message": "Cannot cancel booking less than 2 hours before departure. Please contact airport."
                     }
                 elif time_to_departure.days < 1:
-                    cancellation_fee = booking.total_amount * Decimal('0.5')  # 50% fee
+                    cancellation_fee = booking.total_amount * Decimal("0.5")
                     cancellation_reason = "same_day_cancellation"
                 elif time_to_departure.days < 7:
-                    cancellation_fee = Decimal('200')  # Fixed fee
+                    cancellation_fee = Decimal("200")
                     cancellation_reason = "short_notice_cancellation"
                 elif time_to_departure.days < 30:
-                    cancellation_fee = Decimal('100')  # Reduced fee
+                    cancellation_fee = Decimal("100")
                     cancellation_reason = "advance_cancellation"
-                # else: No fee for 30+ days advance
-                
+
                 refund_amount = booking.total_amount - cancellation_fee
-            
-            # Update booking status
+
             original_status = booking.status
-            booking.status = 'cancelled'
-            
-            # Create refund record
+            booking.status = "cancelled"
+
             refund_ref = f"RF{random.randint(100000, 999999)}"
             refund = Refund(
                 booking_id=booking.id,
                 refund_reference=refund_ref,
-                refund_type='partial' if cancellation_fee > 0 else 'full',
+                refund_type="partial" if cancellation_fee > 0 else "full",
                 amount=refund_amount,
                 reason=cancellation_reason,
-                status='approved',
-                refund_method='credit_card'
+                status="approved",
+                refund_method="credit_card"
             )
             db.add(refund)
-            db.commit()
-            
+            await db.commit()
+
             return {
                 "status": "success",
                 "cancellation_details": {
@@ -485,21 +520,15 @@ class BookingServices:
                 },
                 "message": "Booking cancelled successfully. Refund will be processed to your original payment method."
             }
-            
+
         except BookingNotFoundError as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            db.rollback()
-            return {
-                "status": "error",
-                "message": f"Cancellation failed: {str(e)}"
-            }
+            await db.rollback()
+            return {"status": "error", "message": f"Cancellation failed: {str(e)}"}
     
     @staticmethod
-    async def send_itinerary_email(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_itinerary_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 6: Send complete itinerary via email
         /send_itinerary_email
@@ -624,7 +653,7 @@ class BookingServices:
             }
     
     @staticmethod
-    async def check_arrival_time(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_arrival_time(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 7: Check flight arrival time and details
         /check_arrival_time
@@ -795,7 +824,7 @@ class BookingServices:
             }
     
     @staticmethod
-    async def update_flight_date(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_flight_date(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 9: Update flight date for existing booking
         /update_flight_date
@@ -973,7 +1002,7 @@ class BookingServices:
             }
     
     @staticmethod
-    async def send_email(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_email(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 10: Send various types of emails (boarding pass, confirmation, etc.)
         /send_email
@@ -1282,7 +1311,7 @@ class BookingServices:
             }
     
     @staticmethod
-    async def check_departure_time(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_departure_time(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         ENDPOINT 8: Check flight departure time and details
         /check_departure_time
