@@ -4,7 +4,7 @@
 
 ```
 powershell
-python -m venv _env
+py -3.11 -m venv _env
 
  .\_env\Scripts\activate
 

@@ -72,6 +72,12 @@ async def root():
 # region health
 @app.get("/health")
 async def health_check():
+    # Lightweight check for task
+     return {"status": "ok", "service": "non-ai-service"}
+        
+    
+@app.get("/health-deep")
+async def health_deep():
     """Comprehensive health check endpoint"""
     from .database_connection import check_database_health
 

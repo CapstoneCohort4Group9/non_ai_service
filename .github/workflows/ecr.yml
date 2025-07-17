@@ -69,6 +69,7 @@ jobs:
 
       - name: Run and test Docker image
         env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           TEST_AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
           TEST_AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
           TEST_AWS_REGION: ${{ env.AWS_REGION }}
@@ -94,7 +95,7 @@ jobs:
             -e DB_SECRET_NAME=$TEST_DB_SECRET_NAME \            
             -e DB_MIN_CONNECTIONS=$DB_MIN_CONNECTIONS \
             -e DB_MAX_CONNECTIONS=$DB_MAX_CONNECTIONS \                        
-            --name test-container ${{ steps.build-image.outputs.image }}
+            --name test-container $ECR_REGISTRY/$ECR_REPOSITORY
           sleep 30
           docker logs test-container
           docker exec test-container curl -f http://localhost:8003/health || exit 1
