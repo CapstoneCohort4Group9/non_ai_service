@@ -63,9 +63,13 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY .
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY" >> $GITHUB_OUTPUT
-          echo "Built image: $ECR_REGISTRY/$ECR_REPOSITORY"
+          # Add latest tag to the image
+          IMAGE_TAG="latest"
+          FULL_IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker build -t $FULL_IMAGE_URI .
+          echo "image=$FULL_IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built image: $FULL_IMAGE_URI"
 
       - name: Run and test Docker image
         env:
@@ -82,22 +86,38 @@ jobs:
           TEST_DB_MIN_CONNECTIONS: ${{ env.DB_MIN_CONNECTIONS }}
           TEST_DB_MAX_CONNECTIONS: ${{ env.DB_MAX_CONNECTIONS}}
         run: |
+          # Set the full image URI with tag
+          IMAGE_TAG="latest"
+          FULL_IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          echo "Running container with image: $FULL_IMAGE_URI"
+
+          # Fixed docker run command - removed trailing backslash and properly formatted
           docker run -d -p 8003:8003 \
-            -e AWS_ACCESS_KEY_ID=$TEST_AWS_ACCESS_KEY_ID \
-            -e AWS_SECRET_ACCESS_KEY=$TEST_AWS_SECRET_ACCESS_KEY \
-            -e AWS_REGION=$TEST_AWS_REGION \
-            -e DB_HOST=$TEST_DB_HOST \
-            -e DB_NAME=$TEST_DB_NAME \
-            -e DB_PORT=$TEST_DB_PORT \
-            -e DB_USER=$TEST_DB_USER \
-            -e DB_PASS=$TEST_DB_PASS \
-            -e DB_SECRET_NAME=$TEST_DB_SECRET_NAME \ 
-            -e DB_MIN_CONNECTIONS=$TEST_DB_MIN_CONNECTIONS \
-            -e DB_MAX_CONNECTIONS=$TEST_DB_MAX_CONNECTIONS \
-            --name test-container $ECR_REGISTRY/$ECR_REPOSITORY
+            -e AWS_ACCESS_KEY_ID="$TEST_AWS_ACCESS_KEY_ID" \
+            -e AWS_SECRET_ACCESS_KEY="$TEST_AWS_SECRET_ACCESS_KEY" \
+            -e AWS_REGION="$TEST_AWS_REGION" \
+            -e DB_HOST="$TEST_DB_HOST" \
+            -e DB_NAME="$TEST_DB_NAME" \
+            -e DB_PORT="$TEST_DB_PORT" \
+            -e DB_USER="$TEST_DB_USER" \
+            -e DB_PASS="$TEST_DB_PASS" \
+            -e DB_SECRET_NAME="$TEST_DB_SECRET_NAME" \
+            -e DB_MIN_CONNECTIONS="$TEST_DB_MIN_CONNECTIONS" \
+            -e DB_MAX_CONNECTIONS="$TEST_DB_MAX_CONNECTIONS" \
+            --name test-container \
+            "$FULL_IMAGE_URI"
+
+          echo "Container started, waiting 30 seconds for startup..."
           sleep 30
+
+          echo "Container logs:"
           docker logs test-container
-          docker exec test-container curl -f http://localhost:8003/health || exit 1
+
+          echo "Testing health endpoint..."
+          docker exec test-container curl -f http://localhost:8003/health || (docker logs test-container && exit 1)
+
+          echo "Stopping and removing test container..."
           docker stop test-container
           docker rm test-container
 
@@ -105,8 +125,11 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY
-          echo "Pushed image to ECR: $ECR_REGISTRY/$ECR_REPOSITORY"
+          IMAGE_TAG="latest"
+          FULL_IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker push "$FULL_IMAGE_URI"
+          echo "Pushed image to ECR: $FULL_IMAGE_URI"
 
       - name: Save image URI as artifact
         run: |
