@@ -418,18 +418,18 @@ class CustomerServiceLog(Base):
     created_at = Column(DateTime, default=func.now())
 
 
-# Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://username:password@localhost/hopjetair")
+# # Database configuration
+# DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://username:password@localhost/hopjetair")
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# engine = create_engine(DATABASE_URL)
+# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
 
-def create_tables():
-    Base.metadata.create_all(bind=engine)
+# def create_tables():
+#     Base.metadata.create_all(bind=engine)

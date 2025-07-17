@@ -16,10 +16,10 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair"
 )
 
-SYNC_DATABASE_URL = os.getenv(
-    "SYNC_DATABASE_URL",
-    "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair"
-)
+# SYNC_DATABASE_URL = os.getenv(
+#     "SYNC_DATABASE_URL",
+#     "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair"
+# )
 
 # Connection pool configuration
 MIN_CONNECTIONS = int(os.getenv("DB_MIN_CONNECTIONS", "5"))
