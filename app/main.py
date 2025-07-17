@@ -1,7 +1,6 @@
-# api_endpoints.py
-
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 from contextlib import asynccontextmanager
@@ -36,7 +35,6 @@ from .request_models import (
     SearchFlightInsuranceRequest, SearchTripRequest, SearchTripInsuranceRequest
 )
 
-
 # Lifespan context manager for startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,11 +51,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 # Main application endpoints
 @app.get("/")
 async def root():
     return {
-        "message": "Welcome to HopJetAir Customer Service Non AI API",
+        "message": "Welcome to HopJetAir Customer Service API",
         "version": "1.0.0",
         "status": "operational",
         "endpoints": 70,
@@ -67,11 +66,6 @@ async def root():
 # region health
 @app.get("/health")
 async def health_check():
-    # Lightweight check for task
-    return {"status": "healthy"}
-
-@app.get("/health-deep")
-async def health_deep():
     """Comprehensive health check endpoint"""
     from .database_connection import check_database_health
 
@@ -92,6 +86,9 @@ async def service_information():
     return get_service_info()
 
 # endregion
+
+
+
 # Generic endpoint handler using service registry
 async def handle_endpoint(endpoint_name: str, request_data: dict, db):
     """Generic handler for all endpoints using service registry"""
@@ -306,28 +303,83 @@ async def check_baggage_allowance(request: CheckBaggageAllowanceRequest, db = De
 
 # Auto-generate remaining endpoints using service registry 35
 remaining_endpoints = [
-    "get_trip_cancellation_policy", "cancel_trip", "get_trip_segments",
-    "get_excursion_cancellation_policy", "check_excursion_availability", "book_excursion",
-    "query_flight_availability", "check_flight_availability_and_fare", "confirm_flight_change",
-    "get_airline_checkin_baggage_info", "resend_boarding_pass", "get_check_in_info",
-    "query_airport_checkin_info", "get_phone_checkin_info", "retrieve_booking_by_email",
-    "get_flight_status", "check_trip_insurance_coverage", "check_trip_plan", "book_activity",
-    "check_trip_prices", "search_trip_prices", "change_trip", "cancel_trip", "send_email",
-    "get_refund", "query_booking_details", "update_refund_method", "query_compensation_eligibility",
-    "issue_travel_credit_voucher", "issue_travel_voucher", "update_flight_date",
-    "verify_booking_and_get_boarding_pass", "retrieve_flight_insurance", "check_flight_offers",
-    "check_cancellation_fee"
+    "book_activity", "book_excursion", "cancel_trip", "change_trip",
+    "check_cancellation_fee", "check_excursion_availability", "check_flight_availability_and_fare",
+    "check_flight_offers", "check_trip_insurance_coverage", "check_trip_plan",
+    "check_trip_prices", "confirm_flight_change", "get_airline_checkin_baggage_info",
+    "get_check_in_info", "get_excursion_cancellation_policy", "get_flight_status",
+    "get_phone_checkin_info", "get_refund", "get_trip_cancellation_policy",
+    "get_trip_segments", "issue_travel_credit_voucher", "issue_travel_voucher",
+    "query_airport_checkin_info", "query_booking_details", "query_compensation_eligibility",
+    "query_flight_availability", "resend_boarding_pass", "retrieve_booking_by_email",
+    "retrieve_flight_insurance", "search_trip_prices", "send_email", "update_flight_date",
+    "update_refund_method", "verify_booking_and_get_boarding_pass"
 ]
+
+
+# Mapping of endpoint names to their Pydantic request models
+ENDPOINT_REQUEST_MODELS = {
+    "book_activity": BookActivityRequest,
+    "book_excursion": BookExcursionRequest,
+    "cancel_trip": CancelTripRequest,
+    "change_trip": ChangeTripRequest,
+    "check_cancellation_fee": CheckCancellationFeeRequest,
+    "check_excursion_availability": CheckExcursionAvailabilityRequest,
+    "check_flight_availability_and_fare": CheckFlightAvailabilityAndFareRequest,
+    "check_flight_offers": CheckFlightOffersRequest,
+    "check_trip_details": CheckTripDetailsRequest,
+    "check_trip_insurance_coverage": CheckTripInsuranceCoverageRequest,
+    "check_trip_plan": CheckTripPlanRequest,
+    "check_trip_prices": CheckTripPricesRequest,
+    "confirm_flight_change": ConfirmFlightChangeRequest,
+    "get_airline_checkin_baggage_info": GetAirlineCheckinBaggageInfoRequest,
+    "get_check_in_info": GetCheckInInfoRequest,
+    "get_excursion_cancellation_policy": GetExcursionCancellationPolicyRequest,
+    "get_flight_status": GetFlightStatusRequest,
+    "get_phone_checkin_info": GetPhoneCheckinInfoRequest,
+    "get_refund": GetRefundRequest,
+    "get_trip_cancellation_policy": GetTripCancellationPolicyRequest,
+    "get_trip_segments": CheckTripDetailsRequest,
+    "issue_travel_credit_voucher": IssueTravelCreditVoucherRequest,
+    "issue_travel_voucher": IssueTravelVoucherRequest,
+    "query_airport_checkin_info": QueryAirportCheckinInfoRequest,
+    "query_booking_details": QueryBookingDetailsRequest,
+    "query_compensation_eligibility": QueryCompensationEligibilityRequest,
+    "query_flight_availability": QueryFlightAvailabilityRequest,
+    "resend_boarding_pass": ResendBoardingPassRequest,
+    "retrieve_booking_by_email": RetrieveBookingByEmailRequest,
+    "retrieve_flight_insurance": RetrieveFlightInsuranceRequest,
+    "search_trip_prices": SearchTripPricesRequest,
+    "send_email": SendEmailRequest,
+    "update_flight_date": UpdateFlightDateRequest,
+    "update_refund_method": UpdateRefundMethodRequest,
+    "verify_booking_and_get_boarding_pass": VerifyBookingAndGetBoardingPassRequest
+}
+
+
 
 # Dynamically create remaining endpoints
 for endpoint_name in remaining_endpoints:
-    def make_endpoint(name):
-        async def endpoint_func(request_data: dict, db = Depends(get_db_session)):
-            return await handle_endpoint(name, request_data, db)
-        return endpoint_func
+    # Get the correct Pydantic model for the current endpoint
+    request_model = ENDPOINT_REQUEST_MODELS.get(endpoint_name, BaseModel) # Fallback to BaseModel if not found
 
-    # Register the endpoint
-    app.add_api_route(f"/{endpoint_name}", make_endpoint(endpoint_name), methods=["POST"])
+    def make_endpoint(name, model):
+        # Define the endpoint function with the specific Pydantic model as the request body
+        async def endpoint_func(request: model, db = Depends(get_db_session)):
+            return await handle_endpoint(name, request.dict(), db)
+        return endpoint_func
+    
+    # Generate a user-friendly summary for Swagger UI
+    # Replace underscores with spaces and title case the string
+    swagger_summary = endpoint_name.replace("_", " ").title()
+
+    # Register the endpoint with a custom summary
+    app.add_api_route(
+        f"/{endpoint_name}",
+        make_endpoint(endpoint_name, request_model),
+        methods=["POST"],
+        summary=swagger_summary # 
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8003)
