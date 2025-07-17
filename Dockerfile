@@ -1,5 +1,5 @@
 # Use official Python runtime as base image
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
@@ -38,4 +38,4 @@ HEALTHCHECK --interval=30s --timeout=3s \
   CMD curl -f http://localhost:8003/health || exit 1
 
 # Run the application
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "1"]
