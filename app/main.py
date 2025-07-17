@@ -1,11 +1,17 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 from contextlib import asynccontextmanager
-from .database_connection import init_database, close_database, get_db_session
 from .service_registry import execute_service_endpoint, get_service_info, check_service_health
+
+from .database_connection import init_database, close_database, get_db_session
+
+
 
 # Import all Pydantic models from the new file
 from .request_models import (

@@ -5,25 +5,104 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 import logging
+import boto3
+import json
+from botocore.exceptions import ClientError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Database configuration
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair"
-)
-
-# SYNC_DATABASE_URL = os.getenv(
-#     "SYNC_DATABASE_URL",
-#     "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetair"
-# )
-
 # Connection pool configuration
 MIN_CONNECTIONS = int(os.getenv("DB_MIN_CONNECTIONS", "5"))
 MAX_CONNECTIONS = int(os.getenv("DB_MAX_CONNECTIONS", "20"))
+
+# --- AWS Secrets Manager and Connection String Functions ---
+
+def get_db_credentials():
+    """Get database credentials (username and password) from AWS Secrets Manager"""
+    secret_name = os.getenv("DB_SECRET_NAME")
+    region_name = os.getenv("AWS_REGION")
+    
+    if not secret_name or not region_name:
+        logger.warning("DB_SECRET_NAME or AWS_REGION not set. Cannot fetch credentials from Secrets Manager.")
+        return None
+    
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+    
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId=secret_name
+        )
+        secret = json.loads(get_secret_value_response['SecretString'])
+        logger.info(f"Successfully fetched credentials from AWS Secrets Manager for secret: {secret_name}")
+        return secret
+    except ClientError as e:
+        logger.error(f"Error fetching secret '{secret_name}' from Secrets Manager: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while fetching secret from Secrets Manager: {e}")
+        return None
+
+def get_connection_string():
+    """
+    Build database connection string dynamically.
+    Username and password from AWS Secrets Manager (or fallback to env).
+    Host, port, database name always from environment variables.
+    Returns SQLAlchemy compatible URL (e.g., postgresql+asyncpg://).
+    """
+    db_username = None
+    db_password = None
+    
+    # Attempt to get username and password from AWS Secrets Manager
+    try:
+        credentials = get_db_credentials()
+        if credentials:
+            db_password = credentials.get('password') # Common key in Secrets Manager
+            db_username = credentials.get('username') # Common key in Secrets Manager
+            
+            if not all([db_username, db_password]):
+                logger.warning("Incomplete username/password from Secrets Manager. Falling back to environment variables.")
+                db_username, db_password = None, None # Reset to trigger fallback
+        else:
+            logger.warning("No credentials returned from AWS Secrets Manager. Falling back to environment variables for username/password.")
+            
+    except Exception as e:
+        logger.error(f"Error during Secrets Manager credential retrieval for username/password: {e}. Falling back to environment variables.")
+        db_username, db_password = None, None
+
+    # Fallback to environment variables for username/password if Secrets Manager failed or was incomplete
+    if not all([db_username, db_password]):
+        db_username = os.getenv("DB_USERNAME")
+        db_password = os.getenv("DB_PASSWORD")
+        logger.info("Using environment variables for database username and password.")
+    else:
+        logger.info("Using AWS Secrets Manager credentials for database username and password.")
+
+    # Always get host, port, and database name from environment variables
+    host = os.getenv("DB_HOST")
+    port = os.getenv("DB_PORT", "5432")
+    database = os.getenv("DB_NAME")
+    
+    # Validate required variables
+    if not all([host, database, db_username, db_password]):
+        error_msg = "Missing required database configuration (host, database, username, or password). Please set environment variables or AWS Secrets Manager."
+        logger.critical(error_msg)
+        raise ValueError(error_msg)
+    
+    # Build connection string for SQLAlchemy (with +asyncpg)
+    connection_string = f"postgresql+asyncpg://{db_username}:{db_password}@{host}:{port}/{database}"
+    return connection_string
+
+# Initialize DATABASE_URL using the function
+DATABASE_URL = get_connection_string()
+
+# --- End AWS Secrets Manager and Connection String Functions ---
+
 
 class DatabaseManager:
     def __init__(self):
@@ -34,12 +113,12 @@ class DatabaseManager:
     async def initialize(self):
         """Initialize database connections and pool"""
         try:
-            # Create async engine
+            # Create async engine for SQLAlchemy
             self.engine = create_async_engine(
                 DATABASE_URL,
                 echo=False,
-                pool_size=10,
-                max_overflow=20,
+                pool_size=MIN_CONNECTIONS,
+                max_overflow=MAX_CONNECTIONS - MIN_CONNECTIONS,
                 pool_timeout=30,
                 pool_recycle=3600
             )
@@ -51,9 +130,11 @@ class DatabaseManager:
                 expire_on_commit=False
             )
             
-            # Initialize connection pool for raw queries
+            # Initialize connection pool for raw queries (psycopg_pool)
+            # Remove '+asyncpg' from the URL for psycopg_pool
+            raw_conn_info = DATABASE_URL.replace("+asyncpg", "")
             self.pool = AsyncConnectionPool(
-                conninfo=DATABASE_URL.replace("+asyncpg", ""),
+                conninfo=raw_conn_info,
                 min_size=MIN_CONNECTIONS,
                 max_size=MAX_CONNECTIONS,
                 timeout=30
