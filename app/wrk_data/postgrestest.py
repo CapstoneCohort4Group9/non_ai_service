@@ -4,7 +4,7 @@ import psycopg2
 db_host = "hopjetair-postgres.cepc0wqo22hd.us-east-1.rds.amazonaws.com"
 
 
-db_name = "hopjetair"
+db_name = "hopjetairline_db"
 db_user = "hopjetair"
 db_pass = "SecurePass123!"
 

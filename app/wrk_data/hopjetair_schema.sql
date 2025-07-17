@@ -340,7 +340,7 @@ CREATE INDEX idx_flight_seats_flight ON flight_seats(flight_id);
 CREATE INDEX idx_insurance_policies_booking ON insurance_policies(booking_id);
 
 
-GRANT ALL PRIVILEGES ON DATABASE hopjetair TO hopjetair;
-GRANT ALL ON SCHEMA public TO hopjetair;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO hopjetair;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO hopjetair;
+-- GRANT ALL PRIVILEGES ON DATABASE hopjetairline_db TO hopjetairline_db;
+-- GRANT ALL ON SCHEMA public TO hopjetairline_db;
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO hopjetairline_db;
+-- GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO hopjetairline_db;
