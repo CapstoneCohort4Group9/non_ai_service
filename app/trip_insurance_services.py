@@ -462,20 +462,31 @@ class InsuranceService:
     async def search_flight_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search for flight insurance options"""
         try:
-            destination = params.get('destination', 'Miami')
-            start_date = params.get('start_date')
-            end_date = params.get('end_date')
-            travelers = params.get('travelers', 1)
-            coverage_needs = params.get('coverage_needs', params.get('coverage', []))
-            trip_cost = params.get('trip_cost', 500)
-            
+            destination = params.get("destination", "Miami")
+            start_date = params.get("start_date")
+            end_date = params.get("end_date")
+            travelers = params.get("travelers", 1)
+            coverage_needs = params.get("coverage_needs") or params.get("coverage") or []
+
+            try:
+                travelers = int(travelers)
+            except (TypeError, ValueError):
+                travelers = 1
+
+            # Validate trip_cost
+            trip_cost_raw = params.get("trip_cost", 500)
+            try:
+                trip_cost = float(trip_cost_raw)
+            except (TypeError, ValueError):
+                trip_cost = 500.0  # default fallback
+
             # Define insurance plans
             insurance_plans = [
                 {
                     "plan_name": "Basic Flight Protection",
                     "plan_code": "BASIC_FLIGHT",
                     "coverage_type": "flight",
-                    "premium": 29.99 * travelers,
+                    "premium": round(29.99 * travelers, 2),
                     "coverage_amount": 1000,
                     "benefits": [
                         "Flight cancellation up to $1,000",
@@ -494,7 +505,7 @@ class InsuranceService:
                     "plan_name": "Comprehensive Travel Shield",
                     "plan_code": "COMPREHENSIVE",
                     "coverage_type": "comprehensive",
-                    "premium": 89.99 * travelers,
+                    "premium": round(89.99 * travelers, 2),
                     "coverage_amount": 5000,
                     "benefits": [
                         "Trip cancellation up to $5,000",
@@ -514,7 +525,7 @@ class InsuranceService:
                     "plan_name": "Premium Global Coverage",
                     "plan_code": "PREMIUM_GLOBAL",
                     "coverage_type": "premium",
-                    "premium": 149.99 * travelers,
+                    "premium": round(149.99 * travelers, 2),
                     "coverage_amount": 10000,
                     "benefits": [
                         "Trip cancellation up to $10,000",
@@ -533,27 +544,24 @@ class InsuranceService:
                     "deductible": 0
                 }
             ]
-            
-            # Score plans based on coverage needs
+
+            # Score and enhance plans
             for plan in insurance_plans:
-                score = 0
-                for need in coverage_needs:
-                    if any(need.lower() in benefit.lower() for benefit in plan['benefits']):
-                        score += 1
-                plan['match_score'] = score
-                
-                # Add trip-specific calculations
-                plan['coverage_percentage'] = min(100, (plan['coverage_amount'] / trip_cost) * 100) if trip_cost > 0 else 100
-                plan['premium_percentage'] = (plan['premium'] / trip_cost) * 100 if trip_cost > 0 else 0
-            
-            # Sort by match score
-            insurance_plans.sort(key=lambda x: -x['match_score'])
-            
+                score = sum(
+                    1 for need in coverage_needs
+                    if any(need.lower() in benefit.lower() for benefit in plan["benefits"])
+                )
+                plan["match_score"] = score
+                plan["coverage_percentage"] = round(min(100, (plan["coverage_amount"] / trip_cost) * 100), 2) if trip_cost > 0 else 100
+                plan["premium_percentage"] = round((plan["premium"] / trip_cost) * 100, 2) if trip_cost > 0 else 0
+
+            insurance_plans.sort(key=lambda x: -x["match_score"])
+
             return {
                 "status": "success",
                 "search_criteria": {
                     "destination": destination,
-                    "travel_dates": f"{start_date} to {end_date}",
+                    "travel_dates": f"{start_date} to {end_date}" if start_date and end_date else "Not specified",
                     "travelers": travelers,
                     "coverage_needs": coverage_needs,
                     "trip_cost": trip_cost
@@ -573,73 +581,87 @@ class InsuranceService:
                     "Adventure sports require specialized coverage"
                 ]
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
                 "message": f"Insurance search failed: {str(e)}"
             }
-    
+            
     @staticmethod
     async def purchase_flight_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Purchase flight insurance"""
         try:
-            plan = params.get('plan', 'comprehensive')
-            destination = params.get('destination')
-            start_date = params.get('start_date')
-            end_date = params.get('end_date')
-            travelers = params.get('travelers', 1)
-            booking_ref = params.get('booking_reference', params.get('confirmation_number'))
-            trip_cost = params.get('ticket_price', 500)
-            
-            # Find existing booking if provided
+            plan = params.get("plan", "comprehensive")
+            destination = params.get("destination")
+            start_date = params.get("start_date")
+            end_date = params.get("end_date")
+            travelers = params.get("travelers", 1)
+            booking_ref = params.get("booking_reference") or params.get("confirmation_number")
+            ticket_price_raw = params.get("ticket_price", 500)
+
+            try:
+                travelers = int(travelers)
+            except (TypeError, ValueError):
+                travelers = 1
+
+            try:
+                trip_cost = float(ticket_price_raw)
+            except (TypeError, ValueError):
+                trip_cost = 500.0
+
+            # 🔍 Find existing booking
             booking = None
             if booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
-            
-            # Determine plan details
+                booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+                booking = (await db.execute(booking_stmt)).scalars().first()
+
+            # 🛡️ Insurance plan details
             plan_details = {
-                'basic': {'premium': 29.99, 'coverage': 1000, 'type': 'flight'},
-                'standard': {'premium': 89.99, 'coverage': 5000, 'type': 'comprehensive'},
-                'comprehensive': {'premium': 89.99, 'coverage': 5000, 'type': 'comprehensive'},
-                'full': {'premium': 149.99, 'coverage': 10000, 'type': 'premium'},
-                'premium': {'premium': 149.99, 'coverage': 10000, 'type': 'premium'}
+                "basic": {"premium": 29.99, "coverage": 1000, "type": "flight"},
+                "standard": {"premium": 89.99, "coverage": 5000, "type": "comprehensive"},
+                "comprehensive": {"premium": 89.99, "coverage": 5000, "type": "comprehensive"},
+                "full": {"premium": 149.99, "coverage": 10000, "type": "premium"},
+                "premium": {"premium": 149.99, "coverage": 10000, "type": "premium"}
             }
-            
-            selected_plan = plan_details.get(plan, plan_details['comprehensive'])
-            total_premium = selected_plan['premium'] * travelers
-            
-            # Generate policy number
+
+            selected_plan = plan_details.get(plan.lower(), plan_details["comprehensive"])
+            total_premium = round(selected_plan["premium"] * travelers, 2)
+
+            # 🔢 Generate unique policy number
             policy_number = f"HJ{random.randint(100000, 999999)}"
-            
-            # Create insurance policy
+
+            # 📝 Create insurance policy record
+            start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else datetime.now().date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else start + timedelta(days=7)
+
             insurance = InsurancePolicy(
                 policy_number=policy_number,
                 booking_id=booking.id if booking else None,
-                passenger_id=booking.passenger_id if booking else 1,  # Default passenger
-                policy_type=selected_plan['type'],
-                coverage_amount=Decimal(str(selected_plan['coverage'])),
+                passenger_id=booking.passenger_id if booking else 1,
+                policy_type=selected_plan["type"],
+                coverage_amount=Decimal(str(selected_plan["coverage"])),
                 premium=Decimal(str(total_premium)),
-                start_date=datetime.strptime(start_date, '%Y-%m-%d').date(),
-                end_date=datetime.strptime(end_date, '%Y-%m-%d').date(),
-                status='active',
-                provider='HopJetAir Insurance Partners',
-                terms_conditions='Standard travel insurance terms apply. See policy documents for complete details.'
+                start_date=start,
+                end_date=end,
+                status="active",
+                provider="HopJetAir Insurance Partners",
+                terms_conditions="Standard travel insurance terms apply. See policy documents for complete details."
             )
             db.add(insurance)
-            db.commit()
-            
+            await db.commit()
+
             return {
                 "status": "success",
                 "policy_number": policy_number,
-                "plan_type": selected_plan['type'],
-                "coverage_amount": selected_plan['coverage'],
+                "plan_type": selected_plan["type"],
+                "coverage_amount": selected_plan["coverage"],
                 "premium_paid": total_premium,
                 "travelers_covered": travelers,
                 "coverage_period": {
-                    "start": start_date,
-                    "end": end_date,
-                    "duration_days": (datetime.strptime(end_date, '%Y-%m-%d') - datetime.strptime(start_date, '%Y-%m-%d')).days
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "duration_days": (end - start).days
                 },
                 "purchase_details": {
                     "purchase_date": datetime.now().isoformat(),
@@ -660,55 +682,68 @@ class InsuranceService:
                 },
                 "claim_process": {
                     "step1": "Contact claims department immediately",
-                    "step2": "Provide policy number and incident details", 
+                    "step2": "Provide policy number and incident details",
                     "step3": "Submit required documentation",
                     "step4": "Receive claim decision within 10 business days"
                 }
             }
-            
+
         except Exception as e:
-            db.rollback()
-            return {
-                "status": "error",
-                "message": f"Insurance purchase failed: {str(e)}"
-            }
+            await db.rollback()
+            return {"status": "error", "message": f"Insurance purchase failed: {str(e)}"}
     
     @staticmethod
     async def search_trip_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search trip insurance options"""
         try:
-            # Use flight insurance logic but adjust for trip-specific needs
+            destination = params.get("destination")
+            start_date = params.get("start_date")
+            end_date = params.get("end_date")
+            coverage_needs = params.get("coverage_needs") or params.get("coverage") or []
+            travelers_raw = params.get("travelers", 1)
+            trip_cost_raw = params.get("budget", 1000)
+
+            try:
+                travelers = int(travelers_raw)
+            except (TypeError, ValueError):
+                travelers = 1
+
+            try:
+                trip_cost = float(trip_cost_raw)
+            except (TypeError, ValueError):
+                trip_cost = 1000.0
+
+            # 🧾 Insurance query payload
             trip_params = {
-                'destination': params.get('destination'),
-                'start_date': params.get('start_date'),
-                'end_date': params.get('end_date'),
-                'travelers': params.get('travelers', 1),
-                'coverage_needs': params.get('coverage_needs', params.get('coverage', [])),
-                'trip_cost': params.get('budget', 1000)
+                "destination": destination,
+                "start_date": start_date,
+                "end_date": end_date,
+                "travelers": travelers,
+                "coverage_needs": coverage_needs,
+                "trip_cost": trip_cost
             }
-            
+
+            # 🔍 Delegate to flight insurance engine
             result = await InsuranceService.search_flight_insurance(db, trip_params)
-            
-            if result["status"] == "success":
-                # Add trip-specific recommendations
+
+            if result.get("status") == "success":
                 result["trip_specific_recommendations"] = [
                     "Trip cancellation coverage is essential for non-refundable bookings",
-                    "Medical coverage is crucial for international destinations", 
+                    "Medical coverage is crucial for international destinations",
                     "Consider baggage coverage for valuable items",
                     "Emergency evacuation coverage for remote destinations"
                 ]
-                
-                # Adjust recommendations based on activities
-                activities = params.get('activities', [])
-                if any(activity in ['hiking', 'skiing', 'diving'] for activity in activities):
+
+                activities = params.get("activities") or []
+                if any(a in ["hiking", "skiing", "diving"] for a in activities):
                     result["activity_recommendations"] = [
                         "Adventure sports require specialized coverage",
                         "Consider premium plans for high-risk activities",
                         "Verify coverage for specific activities planned"
                     ]
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 "status": "error",
@@ -741,24 +776,24 @@ class InsuranceService:
     async def check_flight_insurance_coverage(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check flight insurance coverage details"""
         try:
-            booking_ref = params.get('booking_reference')
-            policy_number = params.get('policy_number')
-            
-            # Find insurance policy
+            booking_ref = params.get("booking_reference")
+            policy_number = params.get("policy_number")
+
             policy = None
+
             if policy_number:
-                policy = db.query(InsurancePolicy).filter_by(policy_number=policy_number).first()
+                policy_stmt = select(InsurancePolicy).where(InsurancePolicy.policy_number == policy_number)
+                policy = (await db.execute(policy_stmt)).scalars().first()
             elif booking_ref:
-                booking = db.query(Booking).filter_by(booking_reference=booking_ref).first()
+                booking_stmt = select(Booking).where(Booking.booking_reference == booking_ref)
+                booking = (await db.execute(booking_stmt)).scalars().first()
                 if booking:
-                    policy = db.query(InsurancePolicy).filter_by(booking_id=booking.id).first()
-            
+                    policy_stmt = select(InsurancePolicy).where(InsurancePolicy.booking_id == booking.id)
+                    policy = (await db.execute(policy_stmt)).scalars().first()
+
             if not policy:
-                return {
-                    "status": "error",
-                    "message": "Insurance policy not found"
-                }
-            
+                return {"status": "error", "message": "Insurance policy not found"}
+
             coverage_details = {
                 "policy_number": policy.policy_number,
                 "policy_status": policy.status,
@@ -773,40 +808,42 @@ class InsuranceService:
                 "provider": policy.provider,
                 "benefits": []
             }
-            
-            # Add benefits based on policy type
-            if policy.policy_type == 'flight':
+
+            if policy.policy_type == "flight":
                 coverage_details["benefits"] = [
                     "Flight cancellation coverage",
                     "Flight delay compensation",
                     "Missed connection protection"
                 ]
-            elif policy.policy_type == 'comprehensive':
+            elif policy.policy_type == "comprehensive":
                 coverage_details["benefits"] = [
                     "Trip cancellation coverage",
                     "Medical emergency coverage",
                     "Baggage protection",
                     "Emergency assistance"
                 ]
-            elif policy.policy_type == 'premium':
+            elif policy.policy_type == "premium":
                 coverage_details["benefits"] = [
                     "Comprehensive trip coverage",
                     "Cancel for any reason",
                     "Adventure sports coverage",
                     "Business equipment protection"
                 ]
-            
+
             return {
                 "status": "success",
                 "coverage_details": coverage_details,
                 "claim_information": {
                     "how_to_claim": "Call 1-800-CLAIM-HJ",
-                    "required_documents": ["Policy number", "Incident details", "Receipts", "Medical reports if applicable"],
-                    "claim_processing_time": "5-10 business days",
+                    "required_documents": [
+                        "Policy number", "Incident details", "Receipts",
+                        "Medical reports if applicable"
+                    ],
+                    "claim_processing_time": "5–10 business days",
                     "emergency_contact": "1-800-EMERGENCY for 24/7 assistance"
                 }
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
