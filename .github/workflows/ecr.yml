@@ -10,9 +10,14 @@ env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: non-ai-api
   AWS_ROLE_ARN: arn:aws:iam::109038807292:role/GitHubActionsRole
-  DATABASE_URL: postgresql+asyncpg://hopjetair:SecurePass123!@localhost:5432/hopjetair
   DB_MIN_CONNECTIONS: 5
   DB_MAX_CONNECTIONS: 20
+  DB_HOST: localhost
+  DB_NAME: test_db
+  DB_PORT: 5432
+  DB_USER: test_user
+  DB_PASS: test_password
+  DB_SECRET_NAME: db_credentials
 
 permissions:
   id-token: write # Required for OIDC
@@ -65,23 +70,32 @@ jobs:
       - name: Run and test Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
-          AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
-          AWS_REGION: ${{ env.AWS_REGION }}
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          TEST_AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          TEST_AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          TEST_AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
+          TEST_AWS_REGION: ${{ env.AWS_REGION }}
+          TEST_DB_HOST: ${{ env.DB_HOST }}
+          TEST_DB_NAME: ${{ env.DB_NAME }}
+          TEST_DB_PORT: ${{ env.DB_PORT}}
+          TEST_DB_USER: ${{ env.DB_USER }}
+          TEST_DB_PASS: ${{ env.DB_PASS }}
+          TEST_DB_SECRET_NAME: ${{ env.DB_SECRET_NAME }}
           DB_MIN_CONNECTIONS: ${{ env.DB_MIN_CONNECTIONS }}
           DB_MAX_CONNECTIONS: ${{ env.DB_MAX_CONNECTIONS}}
         run: |
           docker run -d -p 8003:8003 \
-            -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-            -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-            -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN \
-            -e AWS_REGION=$AWS_REGION \
-            -e DATABASE_URL=$DATABASE_URL \
+            -e AWS_ACCESS_KEY_ID=$TEST_AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY=$TEST_AWS_SECRET_ACCESS_KEY \
+            -e AWS_SESSION_TOKEN=$TEST_AWS_SESSION_TOKEN \
+            -e AWS_REGION=$TEST_AWS_REGION \
+            -e DB_HOST=$TEST_DB_HOST \
+            -e DB_NAME=$TEST_DB_NAME \
+            -e DB_PORT=$TEST_DB_PORT \
+            -e DB_USER=$TEST_DB_USER \
+            -e DB_PASS=$TEST_DB_PASS \
+            -e DB_SECRET_NAME=$TEST_DB_SECRET_NAME \            
             -e DB_MIN_CONNECTIONS=$DB_MIN_CONNECTIONS \
             -e DB_MAX_CONNECTIONS=$DB_MAX_CONNECTIONS \                        
-
             --name test-container $ECR_REGISTRY/$ECR_REPOSITORY
           sleep 30
           docker logs test-container
