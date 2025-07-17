@@ -3,14 +3,15 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Any
 import random
 import string
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy.orm import joinedload
+from sqlalchemy import select, and_, or_, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from .database_models import *
 from .database_connection import DatabaseError, BookingNotFoundError, FlightNotFoundError, PassengerNotFoundError
 
 class TripPackageService:
     @staticmethod
-    async def search_trip(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_trip(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search for trip packages"""
         try:
             destination = params.get('destination', 'Madrid')
@@ -118,7 +119,7 @@ class TripPackageService:
             }
     
     @staticmethod
-    async def book_trip(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def book_trip(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Book a trip package"""
         try:
             package_name = params.get('package', params.get('excursion', 'Madrid Historical Tour'))
@@ -247,7 +248,7 @@ class TripPackageService:
             }
     
     @staticmethod
-    async def check_trip_details(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_trip_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check detailed trip information"""
         try:
             booking_ref = params.get('booking_reference')
@@ -326,7 +327,7 @@ class TripPackageService:
             return {"status": "error", "message": f"Trip details check failed: {str(e)}"}
     
     @staticmethod
-    async def check_trip_offers(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_trip_offers(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check available trip offers and deals"""
         try:
             destination = params.get('destination', params.get('city'))
@@ -438,7 +439,7 @@ class TripPackageService:
 
 class InsuranceService:
     @staticmethod
-    async def search_flight_insurance(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_flight_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search for flight insurance options"""
         try:
             destination = params.get('destination', 'Miami')
@@ -560,7 +561,7 @@ class InsuranceService:
             }
     
     @staticmethod
-    async def purchase_flight_insurance(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def purchase_flight_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Purchase flight insurance"""
         try:
             plan = params.get('plan', 'comprehensive')
@@ -653,7 +654,7 @@ class InsuranceService:
             }
     
     @staticmethod
-    async def search_trip_insurance(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def search_trip_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search trip insurance options"""
         try:
             # Use flight insurance logic but adjust for trip-specific needs
@@ -695,7 +696,7 @@ class InsuranceService:
             }
     
     @staticmethod
-    async def purchase_trip_insurance(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def purchase_trip_insurance(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Purchase trip insurance"""
         try:
             # Use flight insurance purchase logic
@@ -717,7 +718,7 @@ class InsuranceService:
             }
     
     @staticmethod
-    async def check_flight_insurance_coverage(db: Session, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_flight_insurance_coverage(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check flight insurance coverage details"""
         try:
             booking_ref = params.get('booking_reference')

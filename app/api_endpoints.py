@@ -1017,7 +1017,7 @@ async def handle_endpoint(endpoint_name: str, request_data: dict, db):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Flight-related endpoints
+# region Flight-related endpoints 8
 @app.post("/search_flight")
 async def search_flight(request: SearchFlightRequest, db = Depends(get_db_session)):
     """Search for available flights"""
@@ -1057,8 +1057,9 @@ async def search_flight_prices(request: SearchFlightPricesRequest, db = Depends(
 async def check_flight_prices(request: CheckFlightPricesRequest, db = Depends(get_db_session)):
     """Check flight prices"""
     return await handle_endpoint("check_flight_prices", request.dict(), db)
+# endregion
 
-# Booking-related endpoints
+# region Booking-related endpoints 6
 @app.post("/get_booking_details")
 async def get_booking_details(request: GetBookingDetailsRequest, db = Depends(get_db_session)):
     """Get booking details"""
@@ -1088,8 +1089,9 @@ async def check_arrival_time(request: CheckArrivalTimeRequest, db = Depends(get_
 async def check_departure_time(request: CheckDepartureTimeRequest, db = Depends(get_db_session)):
     """Check flight departure time"""
     return await handle_endpoint("check_departure_time", request.dict(), db)
+#endregion
 
-# Seat and Check-in endpoints
+# region Seat and Check-in endpoints 9
 @app.post("/check_seat_availability")
 async def check_seat_availability(request: CheckSeatAvailabilityRequest, db = Depends(get_db_session)):
     """Check seat availability"""
@@ -1134,8 +1136,9 @@ async def send_boarding_pass_email(request: SendBoardingPassEmailRequest, db = D
 async def check_flight_checkin_status(request: CheckFlightCheckinStatusRequest, db = Depends(get_db_session)):
     """Check flight check-in status"""
     return await handle_endpoint("check_flight_checkin_status", request.dict(), db)
+# endregion
 
-# Trip and Package endpoints
+# region Trip and Package endpoints 4
 @app.post("/search_trip")
 async def search_trip(request: SearchTripRequest, db = Depends(get_db_session)):
     """Search trip packages"""
@@ -1155,8 +1158,9 @@ async def check_trip_details(request: CheckTripDetailsRequest, db = Depends(get_
 async def check_trip_offers(request: CheckTripOffersRequest, db = Depends(get_db_session)):
     """Check trip offers"""
     return await handle_endpoint("check_trip_offers", request.dict(), db)
+#endregion
 
-# Insurance endpoints
+# region Insurance endpoints 5
 @app.post("/search_flight_insurance")
 async def search_flight_insurance(request: SearchFlightInsuranceRequest, db = Depends(get_db_session)):
     """Search flight insurance options"""
@@ -1181,8 +1185,9 @@ async def purchase_trip_insurance(request: PurchaseTripInsuranceRequest, db = De
 async def check_flight_insurance_coverage(request: CheckFlightInsuranceCoverageRequest, db = Depends(get_db_session)):
     """Check flight insurance coverage"""
     return await handle_endpoint("check_flight_insurance_coverage", request.dict(), db)
+#endregion
 
-# Support and Policy endpoints
+# region Support and Policy endpoints 6
 @app.post("/query_policy_rag_db")
 async def query_policy_rag_db(request: QueryPolicyRagDbRequest, db = Depends(get_db_session)):
     """Query airline policies"""
@@ -1213,7 +1218,9 @@ async def check_baggage_allowance(request: CheckBaggageAllowanceRequest, db = De
     """Check baggage allowance"""
     return await handle_endpoint("check_baggage_allowance", request.dict(), db)
 
-# Auto-generate remaining endpoints using service registry
+#endregion
+
+# Auto-generate remaining endpoints using service registry 35
 remaining_endpoints = [
     "get_trip_cancellation_policy", "cancel_trip", "get_trip_segments", 
     "get_excursion_cancellation_policy", "check_excursion_availability", "book_excursion",
