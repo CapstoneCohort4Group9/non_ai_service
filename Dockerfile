@@ -20,15 +20,15 @@ COPY app/ ./app/
 
 
 # Set environment variable
-ENV AWS_REGION: us-east-1
-ENV DB_MIN_CONNECTIONS: 5
-ENV DB_MAX_CONNECTIONS: 20
-ENV DB_HOST: hopjetair-postgres.cepc0wqo22hd.us-east-1.rds.amazonaws.com
-ENV DB_NAME: hopjetairline_db
-ENV DB_PORT: 5432
-ENV DB_USER: hopjetair
-ENV DB_PASS: SecurePass123!
-ENV DB_SECRET_NAME: db_credentials
+ENV AWS_REGION us-east-1
+ENV DB_MIN_CONNECTIONS 5
+ENV DB_MAX_CONNECTIONS 20
+ENV DB_HOST hopjetair-postgres.cepc0wqo22hd.us-east-1.rds.amazonaws.com
+ENV DB_NAME hopjetairline_db
+ENV DB_PORT 5432
+ENV DB_USER hopjetair
+ENV DB_PASS SecurePass123!
+ENV DB_SECRET_NAME db_credentials
 
 # Expose port
 EXPOSE 8003
