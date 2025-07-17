@@ -79,8 +79,8 @@ jobs:
           TEST_DB_USER: ${{ env.DB_USER }}
           TEST_DB_PASS: ${{ env.DB_PASS }}
           TEST_DB_SECRET_NAME: ${{ env.DB_SECRET_NAME }}
-          DB_MIN_CONNECTIONS: ${{ env.DB_MIN_CONNECTIONS }}
-          DB_MAX_CONNECTIONS: ${{ env.DB_MAX_CONNECTIONS}}
+          TEST_DB_MIN_CONNECTIONS: ${{ env.DB_MIN_CONNECTIONS }}
+          TEST_DB_MAX_CONNECTIONS: ${{ env.DB_MAX_CONNECTIONS}}
         run: |
           docker run -d -p 8003:8003 \
             -e AWS_ACCESS_KEY_ID=$TEST_AWS_ACCESS_KEY_ID \
@@ -93,8 +93,8 @@ jobs:
             -e DB_USER=$TEST_DB_USER \
             -e DB_PASS=$TEST_DB_PASS \
             -e DB_SECRET_NAME=$TEST_DB_SECRET_NAME \            
-            -e DB_MIN_CONNECTIONS=$DB_MIN_CONNECTIONS \
-            -e DB_MAX_CONNECTIONS=$DB_MAX_CONNECTIONS \                        
+            -e DB_MIN_CONNECTIONS=$TEST_DB_MIN_CONNECTIONS \
+            -e DB_MAX_CONNECTIONS=$TEST_DB_MAX_CONNECTIONS \                        
             --name test-container $ECR_REGISTRY/$ECR_REPOSITORY
           sleep 30
           docker logs test-container
