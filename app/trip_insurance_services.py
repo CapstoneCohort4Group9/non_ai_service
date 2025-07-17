@@ -14,56 +14,65 @@ class TripPackageService:
     async def search_trip(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Search for trip packages"""
         try:
-            destination = params.get('destination', 'Madrid')
-            budget = params.get('budget', params.get('budget_max', params.get('max_budget', 1500)))
-            interests = params.get('interests', params.get('activities', []))
-            duration_days = params.get('duration_days', params.get('duration_nights', params.get('trip_length_days', 5)))
-            origin = params.get('origin', 'New York')
-            departure_date = params.get('departure_date')
-            
-            # Build query
-            query = db.query(TripPackage)
-            
+            destination = params.get("destination", "Madrid")
+            budget = params.get("budget") or params.get("budget_max") or params.get("max_budget") or 1500
+            interests = params.get("interests") or params.get("activities") or []
+            duration_days = (
+                params.get("duration_days") or
+                params.get("duration_nights") or
+                params.get("trip_length_days") or 5
+            )
+            origin = params.get("origin", "New York")
+            departure_date = params.get("departure_date")
+
+            # 🔍 Build dynamic query
+            stmt = select(TripPackage)
+
+            filters = []
             if destination:
-                query = query.filter(
+                filters.append(
                     or_(
                         TripPackage.destination_city.ilike(f"%{destination}%"),
                         TripPackage.destination_country.ilike(f"%{destination}%")
                     )
                 )
-            
-            if budget:
-                query = query.filter(TripPackage.price_per_person <= budget)
-            
+                
+            try:
+                budget_value = float(budget)
+            except (TypeError, ValueError):
+                budget_value = None
+    
+            if budget_value:
+                filters.append(TripPackage.price_per_person <= float(budget))
+                
             if duration_days:
-                # Allow some flexibility in duration
-                query = query.filter(
+                filters.append(
                     TripPackage.duration_days.between(duration_days - 2, duration_days + 2)
                 )
-            
-            packages = query.all()
-            
-            # Score packages based on interests
+            if filters:
+                stmt = stmt.where(*filters)
+
+            result = await db.execute(stmt)
+            packages = result.scalars().all()
+
+            # 🧠 Score packages based on interests
             scored_packages = []
             for package in packages:
                 score = 0
-                if interests:
-                    for interest in interests:
-                        if interest.lower() in package.description.lower():
-                            score += 1
-                        if interest.lower() in package.category.lower():
-                            score += 2
-                        if interest.lower() in package.name.lower():
-                            score += 3
-                
-                # Calculate total price including estimated flight cost
-                flight_cost = random.randint(400, 1200)  # Estimated flight cost
+                for interest in interests:
+                    interest_lower = interest.lower()
+                    if interest_lower in package.description.lower():
+                        score += 1
+                    if interest_lower in package.category.lower():
+                        score += 2
+                    if interest_lower in package.name.lower():
+                        score += 3
+
+                # 💰 Estimate flight cost
+                flight_cost = random.randint(400, 1200)
                 total_price = float(package.price_per_person)
-                if package.includes_flight:
-                    estimated_total = total_price
-                else:
-                    estimated_total = total_price + flight_cost
-                
+                estimated_total = total_price if package.includes_flight else total_price + flight_cost
+
                 package_info = {
                     "package_code": package.package_code,
                     "name": package.name,
@@ -82,18 +91,18 @@ class TripPackageService:
                         "activities": package.includes_activities
                     },
                     "match_score": score,
-                    "departure_options": [origin] if origin else ["New York", "Los Angeles", "Chicago"],
+                    "departure_options": [origin],
                     "available_dates": [
-                        (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
-                        (datetime.now() + timedelta(days=60)).strftime('%Y-%m-%d'),
-                        (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+                        (datetime.now() + timedelta(days=n)).strftime("%Y-%m-%d")
+                        for n in [30, 60, 90]
                     ]
                 }
+
                 scored_packages.append(package_info)
-            
-            # Sort by score and price
-            scored_packages.sort(key=lambda x: (-x['match_score'], x['estimated_total_price']))
-            
+
+            # Sort by match score and total cost
+            scored_packages.sort(key=lambda x: (-x["match_score"], x["estimated_total_price"]))
+
             return {
                 "status": "success",
                 "search_criteria": {
@@ -103,7 +112,7 @@ class TripPackageService:
                     "duration_days": duration_days,
                     "origin": origin
                 },
-                "packages": scored_packages[:10],  # Top 10 results
+                "packages": scored_packages[:10],
                 "total_found": len(scored_packages),
                 "filters_applied": {
                     "destination_filter": bool(destination),
@@ -111,7 +120,7 @@ class TripPackageService:
                     "duration_filter": bool(duration_days)
                 }
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
@@ -122,54 +131,52 @@ class TripPackageService:
     async def book_trip(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Book a trip package"""
         try:
-            package_name = params.get('package', params.get('excursion', 'Madrid Historical Tour'))
-            departure_date = params.get('departure_date')
-            return_date = params.get('return_date')
-            passengers = params.get('passengers', [{'type': 'adult', 'count': 2}])
-            travelers = params.get('travelers', params.get('num_passengers', 2))
-            
-            # Handle different passenger formats
+            package_name = params.get("package") or params.get("excursion") or "Madrid Historical Tour"
+            departure_date = params.get("departure_date")
+            return_date = params.get("return_date")
+            passengers = params.get("passengers", [{"type": "adult", "count": 2}])
+            travelers = params.get("travelers") or params.get("num_passengers") or 2
+
+            # 🎫 Determine passenger count
             if isinstance(passengers, list) and passengers:
-                if isinstance(passengers[0], dict):
-                    total_passengers = sum(p.get('count', 1) for p in passengers)
-                else:
-                    total_passengers = len(passengers)
+                total_passengers = sum(p.get("count", 1) for p in passengers if isinstance(p, dict))
             else:
-                total_passengers = travelers if isinstance(travelers, int) else 2
-            
-            # Find package
-            package = db.query(TripPackage).filter(
+                total_passengers = int(travelers) if isinstance(travelers, int) else 2
+
+            # 🔍 Find package
+            package_stmt = select(TripPackage).where(
                 or_(
                     TripPackage.name.ilike(f"%{package_name}%"),
                     TripPackage.package_code == package_name
                 )
-            ).first()
-            
+            )
+            package = (await db.execute(package_stmt)).scalars().first()
+
+            # 📦 Create default package if missing (demo fallback)
             if not package:
-                # Create a default package for demo
                 package = TripPackage(
-                    package_code='MAD001',
-                    name='Madrid Cultural Explorer',
-                    description='Discover the rich history and culture of Madrid with museum tours, flamenco shows, and traditional tapas experiences.',
-                    destination_city='Madrid',
-                    destination_country='Spain',
+                    package_code="MAD001",
+                    name="Madrid Cultural Explorer",
+                    description="Discover the rich history and culture of Madrid with museum tours, flamenco shows, and traditional tapas experiences.",
+                    destination_city="Madrid",
+                    destination_country="Spain",
                     duration_days=5,
-                    price_per_person=Decimal('1299.00'),
-                    category='cultural',
+                    price_per_person=Decimal("1299.00"),
+                    category="cultural",
                     includes_flight=True,
                     includes_hotel=True,
                     includes_activities=True
                 )
                 db.add(package)
-                db.flush()
-            
-            # Generate booking reference
-            booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            while db.query(TripBooking).filter_by(booking_reference=booking_ref).first():
-                booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            
-            # Create or find passenger
-            passenger = db.query(Passenger).first()  # Simplified for demo
+                await db.flush()
+
+            # 🔐 Generate unique booking reference
+            booking_ref = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            while await db.scalar(select(TripBooking).where(TripBooking.booking_reference == booking_ref)):
+                booking_ref = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+            # 🧍 Create default passenger (demo fallback)
+            passenger = await db.scalar(select(Passenger))
             if not passenger:
                 passenger = Passenger(
                     first_name="John",
@@ -178,23 +185,16 @@ class TripPackageService:
                     phone="+1-555-0123"
                 )
                 db.add(passenger)
-                db.flush()
-            
-            # Parse dates
-            if departure_date:
-                travel_start = datetime.strptime(departure_date, '%Y-%m-%d').date()
-            else:
-                travel_start = (datetime.now() + timedelta(days=30)).date()
-            
-            if return_date:
-                travel_end = datetime.strptime(return_date, '%Y-%m-%d').date()
-            else:
-                travel_end = travel_start + timedelta(days=package.duration_days)
-            
-            # Calculate total amount
+                await db.flush()
+
+            # 📅 Parse dates
+            travel_start = datetime.strptime(departure_date, "%Y-%m-%d").date() if departure_date else (datetime.now() + timedelta(days=30)).date()
+            travel_end = datetime.strptime(return_date, "%Y-%m-%d").date() if return_date else travel_start + timedelta(days=package.duration_days)
+
+            # 💵 Calculate total amount
             total_amount = package.price_per_person * total_passengers
-            
-            # Create trip booking
+
+            # 📝 Create trip booking
             trip_booking = TripBooking(
                 booking_reference=booking_ref,
                 passenger_id=passenger.id,
@@ -203,11 +203,11 @@ class TripPackageService:
                 travel_end_date=travel_end,
                 num_passengers=total_passengers,
                 total_amount=total_amount,
-                status='confirmed'
+                status="confirmed"
             )
             db.add(trip_booking)
-            db.commit()
-            
+            await db.commit()
+
             return {
                 "status": "success",
                 "booking_reference": booking_ref,
@@ -239,9 +239,9 @@ class TripPackageService:
                     "Consider travel insurance"
                 ]
             }
-            
+
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             return {
                 "status": "error",
                 "message": f"Trip booking failed: {str(e)}"
@@ -251,23 +251,39 @@ class TripPackageService:
     async def check_trip_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check detailed trip information"""
         try:
-            booking_ref = params.get('booking_reference')
-            last_name = params.get('last_name')
-            
-            trip_booking = db.query(TripBooking).filter_by(booking_reference=booking_ref).first()
+            booking_ref = params.get("booking_reference")
+            last_name = params.get("last_name")
+
+            # Get trip booking with package and passenger preloaded
+            booking_stmt = (
+                select(TripBooking)
+                .options(
+                    joinedload(TripBooking.trip_package),
+                    joinedload(TripBooking.passenger)
+                )
+                .where(TripBooking.booking_reference == booking_ref)
+            )
+            trip_booking = (await db.execute(booking_stmt)).scalars().first()
+
             if not trip_booking:
                 return {"status": "error", "message": f"Trip booking {booking_ref} not found"}
-            
-            # Verify passenger name if provided
-            if last_name and last_name.lower() not in trip_booking.passenger.last_name.lower():
-                return {"status": "error", "message": "Passenger name does not match booking"}
-            
+
+            if last_name:
+                passenger_last = trip_booking.passenger.last_name
+                if last_name.lower() not in passenger_last.lower():
+                    return {"status": "error", "message": "Passenger name does not match booking"}
+
+            # Get excursions with excursion details preloaded
+            excursion_stmt = (
+                select(ExcursionBooking)
+                .options(joinedload(ExcursionBooking.excursion))
+                .where(ExcursionBooking.trip_booking_id == trip_booking.id)
+            )
+            excursions = (await db.execute(excursion_stmt)).scalars().all()
+
             package = trip_booking.trip_package
             passenger = trip_booking.passenger
-            
-            # Get excursions for this trip
-            excursions = db.query(ExcursionBooking).filter_by(trip_booking_id=trip_booking.id).all()
-            
+
             trip_details = {
                 "booking_reference": booking_ref,
                 "passenger_details": {
@@ -317,12 +333,12 @@ class TripPackageService:
                 ],
                 "special_requests": trip_booking.special_requests
             }
-            
+
             return {
                 "status": "success",
                 "trip_details": trip_details
             }
-            
+
         except Exception as e:
             return {"status": "error", "message": f"Trip details check failed: {str(e)}"}
     
@@ -330,46 +346,50 @@ class TripPackageService:
     async def check_trip_offers(db: AsyncSession, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check available trip offers and deals"""
         try:
-            destination = params.get('destination', params.get('city'))
-            category = params.get('category', params.get('type'))
-            budget = params.get('budget', params.get('budget_per_person', params.get('max_budget')))
-            travelers = params.get('travelers', params.get('traveler_count', 1))
-            
-            # Get base packages
+            destination = params.get("destination") or params.get("city")
+            category = params.get("category") or params.get("type")
+            budget = params.get("budget") or params.get("budget_per_person") or params.get("max_budget")
+            travelers = params.get("travelers") or params.get("traveler_count") or 1
+
+            try:
+                travelers = int(travelers)
+            except (TypeError, ValueError):
+                travelers = 1
+
             search_params = {
-                'destination': destination,
-                'budget': budget,
-                'interests': params.get('interests', params.get('activities', [])),
-                'duration_days': params.get('duration', params.get('duration_days'))
+                "destination": destination,
+                "budget": budget,
+                "interests": params.get("interests") or params.get("activities") or [],
+                "duration_days": params.get("duration") or params.get("duration_days")
             }
-            
+
             base_result = await TripPackageService.search_trip(db, search_params)
-            
-            if base_result["status"] != "success":
+            if base_result.get("status") != "success":
                 return base_result
-            
-            # Add special offers and deals
+
             offers = []
-            for package in base_result["packages"][:5]:  # Top 5 packages
-                # Generate promotional offers
-                base_price = package["price_per_person"]
-                
-                # Early bird discount
-                early_bird_price = base_price * 0.85
+            for package in base_result.get("packages", [])[:5]:
+                base_price = float(package["price_per_person"])
+                destination_info = package.get("destination")
+                dest_city = destination_info.get("city") if isinstance(destination_info, dict) else destination
+                dest_country = destination_info.get("country") if isinstance(destination_info, dict) else None
+
+                # Early Bird
+                early_price = base_price * 0.85
                 offers.append({
                     "package_code": package["package_code"],
                     "package_name": package["name"],
                     "offer_type": "Early Bird Special",
                     "original_price": base_price,
-                    "discounted_price": early_bird_price,
-                    "savings": base_price - early_bird_price,
+                    "discounted_price": round(early_price, 2),
+                    "savings": round(base_price - early_price, 2),
                     "discount_percentage": 15,
                     "conditions": "Book 45 days in advance",
-                    "valid_until": (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
-                    "destinations": [package["destination"]]
+                    "valid_until": (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d"),
+                    "destinations": [destination_info] if isinstance(destination_info, dict) else [destination]
                 })
-                
-                # Group discount
+
+                # Group Discount
                 if travelers >= 4:
                     group_price = base_price * 0.9
                     offers.append({
@@ -377,29 +397,29 @@ class TripPackageService:
                         "package_name": package["name"],
                         "offer_type": "Group Discount",
                         "original_price": base_price,
-                        "discounted_price": group_price,
-                        "savings": base_price - group_price,
+                        "discounted_price": round(group_price, 2),
+                        "savings": round(base_price - group_price, 2),
                         "discount_percentage": 10,
-                        "conditions": f"Groups of {travelers} or more",
-                        "valid_until": (datetime.now() + timedelta(days=60)).strftime('%Y-%m-%d'),
-                        "destinations": [package["destination"]]
+                        "conditions": f"Groups of {travelers}+",
+                        "valid_until": (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d"),
+                        "destinations": [destination_info] if isinstance(destination_info, dict) else [destination]
                     })
-                
-                # Last minute deal
+
+                # Last Minute
                 last_minute_price = base_price * 0.75
                 offers.append({
                     "package_code": package["package_code"],
                     "package_name": package["name"],
                     "offer_type": "Last Minute Deal",
                     "original_price": base_price,
-                    "discounted_price": last_minute_price,
-                    "savings": base_price - last_minute_price,
+                    "discounted_price": round(last_minute_price, 2),
+                    "savings": round(base_price - last_minute_price, 2),
                     "discount_percentage": 25,
                     "conditions": "Departure within 14 days",
-                    "valid_until": (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d'),
-                    "destinations": [package["destination"]]
+                    "valid_until": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "destinations": [destination_info] if isinstance(destination_info, dict) else [destination]
                 })
-            
+
             return {
                 "status": "success",
                 "search_criteria": {
@@ -430,7 +450,7 @@ class TripPackageService:
                     }
                 ]
             }
-            
+
         except Exception as e:
             return {
                 "status": "error",
