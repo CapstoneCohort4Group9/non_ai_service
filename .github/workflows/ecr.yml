@@ -12,11 +12,11 @@ env:
   AWS_ROLE_ARN: arn:aws:iam::109038807292:role/GitHubActionsRole
   DB_MIN_CONNECTIONS: 5
   DB_MAX_CONNECTIONS: 20
-  DB_HOST: localhost
-  DB_NAME: test_db
+  DB_HOST: hopjetair-postgres.cepc0wqo22hd.us-east-1.rds.amazonaws.com
+  DB_NAME: hopjetairline_db
   DB_PORT: 5432
-  DB_USER: test_user
-  DB_PASS: test_password
+  DB_USER: hopjetair
+  DB_PASS: SecurePass123!
   DB_SECRET_NAME: db_credentials
 
 permissions:
@@ -69,10 +69,8 @@ jobs:
 
       - name: Run and test Docker image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           TEST_AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
           TEST_AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
-          TEST_AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
           TEST_AWS_REGION: ${{ env.AWS_REGION }}
           TEST_DB_HOST: ${{ env.DB_HOST }}
           TEST_DB_NAME: ${{ env.DB_NAME }}
@@ -96,7 +94,7 @@ jobs:
             -e DB_SECRET_NAME=$TEST_DB_SECRET_NAME \            
             -e DB_MIN_CONNECTIONS=$DB_MIN_CONNECTIONS \
             -e DB_MAX_CONNECTIONS=$DB_MAX_CONNECTIONS \                        
-            --name test-container $ECR_REGISTRY/$ECR_REPOSITORY
+            --name test-container ${{ steps.build-image.outputs.image }}
           sleep 30
           docker logs test-container
           docker exec test-container curl -f http://localhost:8003/health || exit 1
