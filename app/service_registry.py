@@ -100,19 +100,15 @@ SERVICE_ENDPOINTS = {
     'book_trip': ('trip_packages', 'book_trip'),
     'check_trip_details': ('trip_packages', 'check_trip_details'),
     'check_trip_offers': ('trip_packages', 'check_trip_offers'),
-    'search_flight_insurance': ('insurance', 'search_flight_insurance'),
     'purchase_flight_insurance': ('insurance', 'purchase_flight_insurance'),
-    'search_trip_insurance': ('insurance', 'search_trip_insurance'),
     'purchase_trip_insurance': ('insurance', 'purchase_trip_insurance'),
-    'check_flight_insurance_coverage': ('insurance', 'check_flight_insurance_coverage'),
-    
+       
     # Support and Pricing Services 7
     'escalate_to_human_agent': ('customer_support', 'escalate_to_human_agent'),
     'schedule_callback': ('customer_support', 'schedule_callback'),
     'query_policy_rag_db': ('policy', 'query_policy_rag_db'),
     'initiate_refund': ('refund', 'initiate_refund'),
     'check_refund_eligibility': ('refund', 'check_refund_eligibility'),
-    'check_baggage_allowance': ('baggage', 'check_baggage_allowance'),
     'search_flight_prices': ('pricing', 'search_flight_prices'),
 }
 
@@ -125,15 +121,11 @@ ADDITIONAL_MAPPINGS = {
     'change_trip': ('trip_packages', 'check_trip_details'),  # Would need implementation
     'cancel_trip': ('refund', 'initiate_refund'),
     
-    # Insurance Coverage Checks 1
-    'check_trip_insurance_coverage': ('insurance', 'check_flight_insurance_coverage'),
-    
     # Flight Offers and Pricing 2
     'check_flight_offers': ('pricing', 'search_flight_prices'),
     'check_flight_prices': ('pricing', 'search_flight_prices'),
     
     # Cancellation and Policies 2
-    'check_cancellation_fee': ('policy', 'query_policy_rag_db'),
     'get_trip_cancellation_policy': ('policy', 'query_policy_rag_db'),
     
     # Email Services 1
@@ -146,7 +138,6 @@ ADDITIONAL_MAPPINGS = {
     'book_activity': ('trip_packages', 'book_trip'),
     
     # Additional Check-in Services 3
-    'get_airline_checkin_baggage_info': ('baggage', 'check_baggage_allowance'),
     'resend_boarding_pass': ('boarding_pass', 'send_boarding_pass_email'),
     'get_phone_checkin_info': ('check_in_info', 'get_check_in_info'),
     

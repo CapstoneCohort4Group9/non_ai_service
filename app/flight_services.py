@@ -28,6 +28,14 @@ class FlightSearchService:
 
             origin_airport = (await db.execute(origin_stmt)).scalars().first()
             dest_airport = (await db.execute(dest_stmt)).scalars().first()
+            
+            print(f"DEBUG: Origin airport found: {origin_airport.name if origin_airport else 'None'}")
+            print(f"DEBUG: Destination airport found: {dest_airport.name if dest_airport else 'None'}")            
+            
+            print(f"DEBUG: Origin airport id found: {origin_airport.id if origin_airport else 'None'}")
+            print(f"DEBUG: Destination airport id found: {dest_airport.id if dest_airport else 'None'}")                   
+            
+            
 
             if not origin_airport or not dest_airport:
                 return {
@@ -51,6 +59,8 @@ class FlightSearchService:
                 Route.destination_airport_id == dest_airport.id
             )
             route = (await db.execute(route_stmt)).scalars().first()
+
+            print(f"DEBUG: Route found: {route is not None}")
 
             if not route:
                 return {
@@ -415,15 +425,20 @@ class FlightBookingService:
             passenger_stmt = select(Passenger).where(Passenger.email == passenger_email)
             passenger = (await db.execute(passenger_stmt)).scalars().first()
 
+            # If no matching passenger, pick one at random
             if not passenger:
-                passenger = Passenger(
-                    first_name="John",
-                    last_name="Doe",
-                    email=passenger_email,
-                    phone="+1-555-0123"
+                passenger = await db.scalar(
+                    select(Passenger).order_by(func.random()).limit(1)
                 )
-                db.add(passenger)
-                await db.flush()
+                if not passenger:
+                    passenger = Passenger(
+                        first_name="John",
+                        last_name="Doe",
+                        email=passenger_email,
+                        phone="+1-555-0123"
+                    )
+                    db.add(passenger)
+                    await db.flush()
 
             # Create booking
             booking = Booking(

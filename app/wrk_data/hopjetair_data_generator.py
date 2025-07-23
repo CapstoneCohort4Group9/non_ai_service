@@ -6,6 +6,7 @@ import string
 
 # Database connection
 DB_URL = "postgresql://hopjetair:SecurePass123!@hopjetair-postgres.cepc0wqo22hd.us-east-1.rds.amazonaws.com:5432/hopjetairline_db"
+#DB_URL = "postgresql://hopjetair:SecurePass123!@localhost:5432/hopjetairline_db"
 
 # Initialize Faker
 fake = Faker(['en_US', 'en_GB', 'en_CA', 'en_AU'])

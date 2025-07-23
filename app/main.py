@@ -254,30 +254,16 @@ async def check_trip_offers(request: CheckTripOffersRequest, db = Depends(get_db
 #endregion
 
 # region Insurance endpoints 5
-@app.post("/search_flight_insurance")
-async def search_flight_insurance(request: SearchFlightInsuranceRequest, db = Depends(get_db_session)):
-    """Search flight insurance options"""
-    return await handle_endpoint("search_flight_insurance", request.dict(), db)
-
 @app.post("/purchase_flight_insurance")
 async def purchase_flight_insurance(request: PurchaseFlightInsuranceRequest, db = Depends(get_db_session)):
     """Purchase flight insurance"""
     return await handle_endpoint("purchase_flight_insurance", request.dict(), db)
-
-@app.post("/search_trip_insurance")
-async def search_trip_insurance(request: SearchTripInsuranceRequest, db = Depends(get_db_session)):
-    """Search trip insurance options"""
-    return await handle_endpoint("search_trip_insurance", request.dict(), db)
 
 @app.post("/purchase_trip_insurance")
 async def purchase_trip_insurance(request: PurchaseTripInsuranceRequest, db = Depends(get_db_session)):
     """Purchase trip insurance"""
     return await handle_endpoint("purchase_trip_insurance", request.dict(), db)
 
-@app.post("/check_flight_insurance_coverage")
-async def check_flight_insurance_coverage(request: CheckFlightInsuranceCoverageRequest, db = Depends(get_db_session)):
-    """Check flight insurance coverage"""
-    return await handle_endpoint("check_flight_insurance_coverage", request.dict(), db)
 #endregion
 
 # region Support and Policy endpoints 6
@@ -306,25 +292,21 @@ async def check_refund_eligibility(request: CheckRefundEligibilityRequest, db = 
     """Check refund eligibility"""
     return await handle_endpoint("check_refund_eligibility", request.dict(), db)
 
-@app.post("/check_baggage_allowance")
-async def check_baggage_allowance(request: CheckBaggageAllowanceRequest, db = Depends(get_db_session)):
-    """Check baggage allowance"""
-    return await handle_endpoint("check_baggage_allowance", request.dict(), db)
 
 #endregion
 
 # Auto-generate remaining endpoints using service registry 35
 remaining_endpoints = [
     "book_activity", "book_excursion", "cancel_trip", "change_trip",
-    "check_cancellation_fee", "check_excursion_availability", "check_flight_availability_and_fare",
-    "check_flight_offers", "check_trip_insurance_coverage", "check_trip_plan",
-    "check_trip_prices", "confirm_flight_change", "get_airline_checkin_baggage_info",
+    "check_excursion_availability", "check_flight_availability_and_fare",
+    "check_flight_offers", "check_trip_plan",
+    "check_trip_prices", "confirm_flight_change",
     "get_check_in_info", "get_excursion_cancellation_policy", "get_flight_status",
     "get_phone_checkin_info", "get_refund", "get_trip_cancellation_policy",
     "get_trip_segments", "issue_travel_credit_voucher", "issue_travel_voucher",
     "query_airport_checkin_info", "query_booking_details", "query_compensation_eligibility",
     "query_flight_availability", "resend_boarding_pass", "retrieve_booking_by_email",
-    "retrieve_flight_insurance", "search_trip_prices", "send_email", "update_flight_date",
+    "search_trip_prices", "send_email", "update_flight_date",
     "update_refund_method", "verify_booking_and_get_boarding_pass"
 ]
 
@@ -335,16 +317,13 @@ ENDPOINT_REQUEST_MODELS = {
     "book_excursion": BookExcursionRequest,
     "cancel_trip": CancelTripRequest,
     "change_trip": ChangeTripRequest,
-    "check_cancellation_fee": CheckCancellationFeeRequest,
     "check_excursion_availability": CheckExcursionAvailabilityRequest,
     "check_flight_availability_and_fare": CheckFlightAvailabilityAndFareRequest,
     "check_flight_offers": CheckFlightOffersRequest,
     "check_trip_details": CheckTripDetailsRequest,
-    "check_trip_insurance_coverage": CheckTripInsuranceCoverageRequest,
     "check_trip_plan": CheckTripPlanRequest,
     "check_trip_prices": CheckTripPricesRequest,
     "confirm_flight_change": ConfirmFlightChangeRequest,
-    "get_airline_checkin_baggage_info": GetAirlineCheckinBaggageInfoRequest,
     "get_check_in_info": GetCheckInInfoRequest,
     "get_excursion_cancellation_policy": GetExcursionCancellationPolicyRequest,
     "get_flight_status": GetFlightStatusRequest,
@@ -360,7 +339,6 @@ ENDPOINT_REQUEST_MODELS = {
     "query_flight_availability": QueryFlightAvailabilityRequest,
     "resend_boarding_pass": ResendBoardingPassRequest,
     "retrieve_booking_by_email": RetrieveBookingByEmailRequest,
-    "retrieve_flight_insurance": RetrieveFlightInsuranceRequest,
     "search_trip_prices": SearchTripPricesRequest,
     "send_email": SendEmailRequest,
     "update_flight_date": UpdateFlightDateRequest,
