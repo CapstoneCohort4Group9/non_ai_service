@@ -1,6 +1,7 @@
 .vscode
 __pycache__
 _env/
+_dbenv/
 *.pyc
 data
 db
